@@ -1,7 +1,26 @@
 const express = require("express");
 const db = require("../config/database");
+const upload = require("../config/upload");
+const path = require("path");
+const fs = require("fs");
 
 const router = express.Router();
+
+// Get all products (admin - simple list without slots)
+router.get("/all", async (req, res) => {
+  try {
+    const products = await db.query(
+      "SELECT * FROM products ORDER BY created_at DESC"
+    );
+
+    res.json(products);
+  } catch (error) {
+    console.error("Get all products error:", error);
+    res.status(500).json({
+      error: "Failed to get products",
+    });
+  }
+});
 
 // Get all products with availability
 router.get("/", async (req, res) => {
@@ -177,6 +196,203 @@ router.get("/:id", async (req, res) => {
     console.error("Get product error:", error);
     res.status(500).json({
       error: "Failed to get product",
+    });
+  }
+});
+
+// Create new product
+router.post("/", upload.single("image"), async (req, res) => {
+  try {
+    const { name, description, price, category } = req.body;
+
+    // Validation
+    if (!name || !price) {
+      return res.status(400).json({
+        error: "Name and price are required",
+      });
+    }
+
+    // Get image URL if uploaded
+    const image_url = req.file
+      ? `/uploads/products/${req.file.filename}`
+      : null;
+
+    // Insert product
+    const result = await db.query(
+      `
+      INSERT INTO products (name, description, price, image_url, category, is_active)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `,
+      [
+        name,
+        description || null,
+        parseFloat(price),
+        image_url,
+        category || "beverage",
+      ]
+    );
+
+    res.status(201).json({
+      message: "Product created successfully",
+      product: {
+        id: result.insertId,
+        name,
+        description,
+        price: parseFloat(price),
+        image_url,
+        category: category || "beverage",
+        is_active: true,
+      },
+    });
+  } catch (error) {
+    console.error("Create product error:", error);
+
+    // Delete uploaded file if product creation failed
+    if (req.file) {
+      const filePath = path.join(
+        __dirname,
+        "../../uploads/products",
+        req.file.filename
+      );
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(500).json({
+      error: "Failed to create product",
+    });
+  }
+});
+
+// Update product
+router.put("/:id", upload.single("image"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, price, category, is_active } = req.body;
+
+    // Check if product exists
+    const existing = await db.query("SELECT * FROM products WHERE id = ?", [
+      id,
+    ]);
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        error: "Product not found",
+      });
+    }
+
+    const oldProduct = existing[0];
+
+    // Prepare update data
+    let image_url = oldProduct.image_url;
+
+    // If new image uploaded, delete old image and use new one
+    if (req.file) {
+      // Delete old image if exists
+      if (
+        oldProduct.image_url &&
+        oldProduct.image_url.startsWith("/uploads/")
+      ) {
+        const oldFilename = path.basename(oldProduct.image_url);
+        const oldFilePath = path.join(
+          __dirname,
+          "../../uploads/products",
+          oldFilename
+        );
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+      }
+
+      image_url = `/uploads/products/${req.file.filename}`;
+    }
+
+    // Update product
+    await db.query(
+      `
+      UPDATE products 
+      SET name = ?, description = ?, price = ?, image_url = ?, category = ?, is_active = ?
+      WHERE id = ?
+    `,
+      [
+        name || oldProduct.name,
+        description !== undefined ? description : oldProduct.description,
+        price !== undefined ? parseFloat(price) : oldProduct.price,
+        image_url,
+        category || oldProduct.category,
+        is_active !== undefined ? is_active : oldProduct.is_active,
+        id,
+      ]
+    );
+
+    res.json({
+      message: "Product updated successfully",
+      product: {
+        id: parseInt(id),
+        name: name || oldProduct.name,
+        description:
+          description !== undefined ? description : oldProduct.description,
+        price: price !== undefined ? parseFloat(price) : oldProduct.price,
+        image_url,
+        category: category || oldProduct.category,
+        is_active: is_active !== undefined ? is_active : oldProduct.is_active,
+      },
+    });
+  } catch (error) {
+    console.error("Update product error:", error);
+
+    // Delete uploaded file if update failed
+    if (req.file) {
+      const filePath = path.join(
+        __dirname,
+        "../../uploads/products",
+        req.file.filename
+      );
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    res.status(500).json({
+      error: "Failed to update product",
+    });
+  }
+});
+
+// Delete product
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get product to delete image
+    const product = await db.query("SELECT * FROM products WHERE id = ?", [id]);
+
+    if (product.length === 0) {
+      return res.status(404).json({
+        error: "Product not found",
+      });
+    }
+
+    // Delete image if exists
+    if (product[0].image_url && product[0].image_url.startsWith("/uploads/")) {
+      const filename = path.basename(product[0].image_url);
+      const filePath = path.join(__dirname, "../../uploads/products", filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    // Delete product
+    await db.query("DELETE FROM products WHERE id = ?", [id]);
+
+    res.json({
+      message: "Product deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete product error:", error);
+    res.status(500).json({
+      error: "Failed to delete product",
     });
   }
 });

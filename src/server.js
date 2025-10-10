@@ -56,6 +56,7 @@ app.use("/api/payments", require("./routes/payments"));
 app.use("/api/dispense", require("./routes/dispense"));
 app.use("/api/stock", require("./routes/stock"));
 app.use("/api/telemetry", require("./routes/telemetry"));
+app.use("/api/upload", require("./routes/upload"));
 
 // 404 handler
 app.use("*", (req, res) => {

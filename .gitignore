@@ -24,9 +24,13 @@ pids/
 # Coverage directory used by tools like istanbul
 coverage/
 
-# Uploads
-uploads/
-public/uploads/
+# Uploads (ignore uploaded files but keep directory structure)
+uploads/*
+!uploads/README.md
+!uploads/products/
+uploads/products/*
+!uploads/products/README.md
+!uploads/products/.gitkeep
 
 # Database
 *.sqlite
