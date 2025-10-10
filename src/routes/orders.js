@@ -33,6 +33,18 @@ router.post("/", validateOrder, async (req, res) => {
     const { slot_id, quantity = 1, customer_phone } = req.body;
     const machine_id = process.env.MACHINE_ID || "VM01";
 
+    // DEBUG: Log received data
+    console.log("📦 Create order request:", {
+      slot_id,
+      quantity,
+      customer_phone,
+      machine_id,
+    });
+
+    // Fix undefined customer_phone - convert to null for MySQL
+    const customerPhoneValue = customer_phone || null;
+    console.log("📦 Customer phone processed:", customerPhoneValue);
+
     // Get slot and product information
     const slot = await db.query(
       `
@@ -83,6 +95,25 @@ router.post("/", validateOrder, async (req, res) => {
       .add(15, "minutes")
       .format("YYYY-MM-DD HH:mm:ss");
 
+    // DEBUG: Log parameters before insert
+    const insertParams = [
+      order_id,
+      machine_id,
+      slot_id,
+      slotInfo.product_id,
+      quantity,
+      total_amount,
+      payment_url,
+      payment_token,
+      expires_at,
+      customerPhoneValue, // Use processed value instead of customer_phone
+    ];
+    console.log("📝 Insert parameters:", insertParams);
+    console.log(
+      "📝 Parameter types:",
+      insertParams.map((p) => typeof p)
+    );
+
     // Insert order
     await db.query(
       `
@@ -90,18 +121,7 @@ router.post("/", validateOrder, async (req, res) => {
                          payment_url, payment_token, expires_at, customer_phone)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-      [
-        order_id,
-        machine_id,
-        slot_id,
-        slotInfo.product_id,
-        quantity,
-        total_amount,
-        payment_url,
-        payment_token,
-        expires_at,
-        customer_phone,
-      ]
+      insertParams
     );
 
     // Insert payment record
