@@ -1,13 +1,16 @@
 const express = require("express");
 const { body, validationResult } = require("express-validator");
 const db = require("../config/database");
+const { supabase } = require("../config/supabase");
 // const mqttService = require("../services/mqttService"); // Disabled for now
+
+const USE_SUPABASE = process.env.USE_SUPABASE === "true";
 
 // Mock MQTT service for testing
 const mockMqttService = {
   publishDispenseCommand: () => {
     return { success: true, message: "Mock dispensing command sent" };
-  }
+  },
 };
 
 const router = express.Router();
@@ -38,41 +41,89 @@ router.post("/trigger", async (req, res) => {
       });
     }
 
-    // Get order details
-    const order = await db.query(
-      `
-      SELECT o.*, s.slot_number, s.motor_duration_ms
-      FROM orders o
-      JOIN slots s ON o.slot_id = s.id
-      WHERE o.id = ? AND o.status = 'PAID'
-    `,
-      [order_id]
-    );
+    let orderInfo;
 
-    if (order.length === 0) {
-      return res.status(404).json({
-        error: "Order not found or not paid",
-      });
+    if (USE_SUPABASE) {
+      // Supabase: Get order with slot details
+      const { data, error } = await supabase
+        .from("orders")
+        .select(
+          `
+          *,
+          slot:slots (
+            slot_number,
+            motor_duration_ms
+          )
+        `
+        )
+        .eq("id", order_id)
+        .eq("status", "PAID")
+        .single();
+
+      if (error || !data) {
+        return res.status(404).json({
+          error: "Order not found or not paid",
+        });
+      }
+
+      orderInfo = {
+        ...data,
+        slot_number: data.slot.slot_number,
+        motor_duration_ms: data.slot.motor_duration_ms,
+      };
+    } else {
+      // MySQL: Get order details
+      const order = await db.query(
+        `
+        SELECT o.*, s.slot_number, s.motor_duration_ms
+        FROM orders o
+        JOIN slots s ON o.slot_id = s.id
+        WHERE o.id = ? AND o.status = 'PAID'
+      `,
+        [order_id]
+      );
+
+      if (order.length === 0) {
+        return res.status(404).json({
+          error: "Order not found or not paid",
+        });
+      }
+
+      orderInfo = order[0];
     }
 
-    const orderInfo = order[0];
+    if (USE_SUPABASE) {
+      // Supabase: Update order status to dispensing
+      await supabase
+        .from("orders")
+        .update({ status: "DISPENSING" })
+        .eq("id", order_id);
 
-    // Update order status to dispensing
-    await db.query(
-      `
-      UPDATE orders SET status = 'DISPENSING' WHERE id = ?
-    `,
-      [order_id]
-    );
+      // Supabase: Create dispense log
+      await supabase.from("dispense_logs").insert({
+        order_id: order_id,
+        machine_id: orderInfo.machine_id,
+        slot_number: orderInfo.slot_number,
+        command_sent_at: new Date().toISOString(),
+      });
+    } else {
+      // MySQL: Update order status to dispensing
+      await db.query(
+        `
+        UPDATE orders SET status = 'DISPENSING' WHERE id = ?
+      `,
+        [order_id]
+      );
 
-    // Create dispense log
-    await db.query(
-      `
-      INSERT INTO dispense_logs (order_id, machine_id, slot_number, command_sent_at)
-      VALUES (?, ?, ?, NOW())
-    `,
-      [order_id, orderInfo.machine_id, orderInfo.slot_number]
-    );
+      // MySQL: Create dispense log
+      await db.query(
+        `
+        INSERT INTO dispense_logs (order_id, machine_id, slot_number, command_sent_at)
+        VALUES (?, ?, ?, NOW())
+      `,
+        [order_id, orderInfo.machine_id, orderInfo.slot_number]
+      );
+    }
 
     // Here you would send MQTT command to ESP32
     const dispenseCommand = {
@@ -129,66 +180,125 @@ router.post("/confirm", validateDispense, async (req, res) => {
       error_message,
     } = req.body;
 
-    // Update dispense log
-    await db.query(
-      `
-      UPDATE dispense_logs 
-      SET completed_at = NOW(), success = ?, drop_detected = ?, 
-          duration_ms = ?, error_message = ?
-      WHERE order_id = ? AND slot_number = ?
-    `,
-      [
-        success,
-        drop_detected,
-        duration_ms,
-        error_message,
-        order_id,
-        slot_number,
-      ]
-    );
+    const now = new Date().toISOString();
+
+    if (USE_SUPABASE) {
+      // Supabase: Update dispense log
+      await supabase
+        .from("dispense_logs")
+        .update({
+          completed_at: now,
+          success: success,
+          drop_detected: drop_detected,
+          duration_ms: duration_ms,
+          error_message: error_message,
+        })
+        .eq("order_id", order_id)
+        .eq("slot_number", slot_number);
+    } else {
+      // MySQL: Update dispense log
+      await db.query(
+        `
+        UPDATE dispense_logs 
+        SET completed_at = NOW(), success = ?, drop_detected = ?, 
+            duration_ms = ?, error_message = ?
+        WHERE order_id = ? AND slot_number = ?
+      `,
+        [
+          success,
+          drop_detected,
+          duration_ms,
+          error_message,
+          order_id,
+          slot_number,
+        ]
+      );
+    }
 
     let order_status = "FAILED";
     if (success && drop_detected) {
       order_status = "COMPLETED";
 
-      // Update stock
-      await db.query(
-        `
-        UPDATE slots s
-        JOIN orders o ON s.id = o.slot_id
-        SET s.current_stock = s.current_stock - o.quantity
-        WHERE o.id = ?
-      `,
-        [order_id]
-      );
+      if (USE_SUPABASE) {
+        // Supabase: Get order and slot info
+        const { data: orderData } = await supabase
+          .from("orders")
+          .select("*, slot:slots(*)")
+          .eq("id", order_id)
+          .single();
 
-      // Log stock change
-      await db.query(
-        `
-        INSERT INTO stock_logs (machine_id, slot_id, change_type, quantity_before, quantity_after, quantity_change, reason)
-        SELECT o.machine_id, o.slot_id, 'DISPENSE', s.current_stock + o.quantity, s.current_stock, -o.quantity, CONCAT('Order ', o.id)
-        FROM orders o
-        JOIN slots s ON o.slot_id = s.id
-        WHERE o.id = ?
-      `,
-        [order_id]
-      );
+        if (orderData) {
+          const slot = orderData.slot;
+          const oldStock = slot.current_stock;
+          const newStock = oldStock - orderData.quantity;
+
+          // Update stock
+          await supabase
+            .from("slots")
+            .update({ current_stock: newStock })
+            .eq("id", orderData.slot_id);
+
+          // Log stock change
+          await supabase.from("stock_logs").insert({
+            machine_id: orderData.machine_id,
+            slot_id: orderData.slot_id,
+            change_type: "DISPENSE",
+            quantity_before: oldStock,
+            quantity_after: newStock,
+            quantity_change: -orderData.quantity,
+            reason: `Order ${orderData.id}`,
+            created_at: now,
+          });
+        }
+      } else {
+        // MySQL: Update stock
+        await db.query(
+          `
+          UPDATE slots s
+          JOIN orders o ON s.id = o.slot_id
+          SET s.current_stock = s.current_stock - o.quantity
+          WHERE o.id = ?
+        `,
+          [order_id]
+        );
+
+        // MySQL: Log stock change
+        await db.query(
+          `
+          INSERT INTO stock_logs (machine_id, slot_id, change_type, quantity_before, quantity_after, quantity_change, reason)
+          SELECT o.machine_id, o.slot_id, 'DISPENSE', s.current_stock + o.quantity, s.current_stock, -o.quantity, CONCAT('Order ', o.id)
+          FROM orders o
+          JOIN slots s ON o.slot_id = s.id
+          WHERE o.id = ?
+        `,
+          [order_id]
+        );
+      }
     } else if (!success && error_message) {
       // If dispense failed, we might want to retry or refund
       console.log(`❌ Dispense failed for order ${order_id}: ${error_message}`);
     }
 
-    // Update order status
-    await db.query(
-      `
-      UPDATE orders 
-      SET status = ?, dispensed_at = ${
-        order_status === "COMPLETED" ? "NOW()" : "NULL"
+    if (USE_SUPABASE) {
+      // Supabase: Update order status
+      const orderUpdate = { status: order_status };
+      if (order_status === "COMPLETED") {
+        orderUpdate.dispensed_at = now;
       }
-      WHERE id = ?
-    `,
-      [order_status, order_id]
-    );
+      await supabase.from("orders").update(orderUpdate).eq("id", order_id);
+    } else {
+      // MySQL: Update order status
+      await db.query(
+        `
+        UPDATE orders 
+        SET status = ?, dispensed_at = ${
+          order_status === "COMPLETED" ? "NOW()" : "NULL"
+        }
+        WHERE id = ?
+      `,
+        [order_status, order_id]
+      );
+    }
 
     res.json({
       order_id,

@@ -45,24 +45,63 @@ router.post("/", validateOrder, async (req, res) => {
     const customerPhoneValue = customer_phone || null;
     console.log("📦 Customer phone processed:", customerPhoneValue);
 
-    // Get slot and product information
-    const slot = await db.query(
-      `
-      SELECT s.*, p.name as product_name, p.price, p.is_active as product_active
-      FROM slots s
-      JOIN products p ON s.product_id = p.id
-      WHERE s.id = ? AND s.machine_id = ? AND s.is_active = 1
-    `,
-      [slot_id, machine_id]
-    );
+    let slotInfo;
 
-    if (slot.length === 0) {
-      return res.status(404).json({
-        error: "Slot not found or inactive",
-      });
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Get slot and product info using joins
+      const supabase = db.getClient();
+      const { data: slotData, error } = await supabase
+        .from("slots")
+        .select(
+          `
+          *,
+          products (
+            id,
+            name,
+            price,
+            is_active
+          )
+        `
+        )
+        .eq("id", slot_id)
+        .eq("machine_id", machine_id)
+        .eq("is_active", true)
+        .single();
+
+      if (error || !slotData) {
+        return res.status(404).json({
+          error: "Slot not found or inactive",
+        });
+      }
+
+      // Transform to match MySQL format
+      slotInfo = {
+        ...slotData,
+        product_name: slotData.products.name,
+        price: slotData.products.price,
+        product_active: slotData.products.is_active,
+        product_id: slotData.products.id,
+      };
+    } else {
+      // MySQL: Use raw SQL query
+      const slot = await db.query(
+        `
+        SELECT s.*, p.name as product_name, p.price, p.is_active as product_active
+        FROM slots s
+        JOIN products p ON s.product_id = p.id
+        WHERE s.id = ? AND s.machine_id = ? AND s.is_active = 1
+      `,
+        [slot_id, machine_id]
+      );
+
+      if (slot.length === 0) {
+        return res.status(404).json({
+          error: "Slot not found or inactive",
+        });
+      }
+
+      slotInfo = slot[0];
     }
-
-    const slotInfo = slot[0];
 
     // Check stock availability
     if (slotInfo.current_stock < quantity) {
@@ -90,48 +129,88 @@ router.post("/", validateOrder, async (req, res) => {
 
     // Create payment URL (mock for now - integrate with real payment gateway)
     const payment_token = uuidv4();
-    const payment_url = `https://sandbox.midtrans.com/v2/qris/${payment_token}`;
-    const expires_at = moment()
-      .add(15, "minutes")
-      .format("YYYY-MM-DD HH:mm:ss");
+    const payment_url = `midtrans://payment/${order_id}`; // Placeholder - frontend will create actual Snap URL
+    const expires_at = moment().add(15, "minutes").toISOString();
 
-    // DEBUG: Log parameters before insert
-    const insertParams = [
-      order_id,
-      machine_id,
-      slot_id,
-      slotInfo.product_id,
-      quantity,
-      total_amount,
-      payment_url,
-      payment_token,
-      expires_at,
-      customerPhoneValue, // Use processed value instead of customer_phone
-    ];
-    console.log("📝 Insert parameters:", insertParams);
-    console.log(
-      "📝 Parameter types:",
-      insertParams.map((p) => typeof p)
-    );
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Insert order
+      const supabase = db.getClient();
 
-    // Insert order
-    await db.query(
-      `
-      INSERT INTO orders (id, machine_id, slot_id, product_id, quantity, total_amount, 
-                         payment_url, payment_token, expires_at, customer_phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-      insertParams
-    );
+      const { data: orderData, error: orderError } = await supabase
+        .from("orders")
+        .insert({
+          id: order_id,
+          machine_id,
+          slot_id,
+          product_id: slotInfo.product_id,
+          quantity,
+          total_amount,
+          payment_url,
+          payment_token,
+          expires_at,
+          customer_phone: customerPhoneValue,
+          status: "PENDING",
+        })
+        .select()
+        .single();
 
-    // Insert payment record
-    await db.query(
-      `
-      INSERT INTO payments (order_id, gateway_name, amount, payment_type)
-      VALUES (?, 'midtrans', ?, 'qris')
-    `,
-      [order_id, total_amount]
-    );
+      if (orderError) {
+        console.error("Supabase insert order error:", orderError);
+        throw orderError;
+      }
+
+      // Insert payment record
+      const { error: paymentError } = await supabase.from("payments").insert({
+        order_id,
+        gateway_name: "midtrans",
+        amount: total_amount,
+        payment_type: "qris",
+        status: "PENDING",
+      });
+
+      if (paymentError) {
+        console.error("Supabase insert payment error:", paymentError);
+        throw paymentError;
+      }
+    } else {
+      // MySQL: Use raw SQL queries
+      const insertParams = [
+        order_id,
+        machine_id,
+        slot_id,
+        slotInfo.product_id,
+        quantity,
+        total_amount,
+        payment_url,
+        payment_token,
+        expires_at,
+        customerPhoneValue,
+      ];
+      console.log("📝 Insert parameters:", insertParams);
+      console.log(
+        "📝 Parameter types:",
+        insertParams.map((p) => typeof p)
+      );
+
+      // Insert order
+      await db.query(
+        `
+        INSERT INTO orders (id, machine_id, slot_id, product_id, quantity, total_amount, 
+                           payment_url, payment_token, expires_at, customer_phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        insertParams
+      );
+
+      // Insert payment record
+      await db.query(
+        `
+        INSERT INTO payments (order_id, gateway_name, amount, payment_type)
+        VALUES (?, 'midtrans', ?, 'qris')
+      `,
+        [order_id, total_amount]
+      );
+    }
 
     res.status(201).json({
       order_id,

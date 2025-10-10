@@ -98,39 +98,89 @@ router.get("/available", async (req, res) => {
     const { machine_id } = req.query;
     const currentMachine = machine_id || process.env.MACHINE_ID || "VM01";
 
-    const products = await db.query(
-      `
-      SELECT 
-        p.*,
-        s.id as slot_id,
-        s.slot_number,
-        s.current_stock,
-        COALESCE(s.price_override, p.price) as final_price
-      FROM products p
-      JOIN slots s ON p.id = s.product_id
-      WHERE p.is_active = 1 
-        AND s.is_active = 1 
-        AND s.current_stock > 0
-        AND s.machine_id = ?
-      ORDER BY s.slot_number ASC
-    `,
-      [currentMachine]
-    );
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Use getClient() to access supabase instance
+      const supabase = db.getClient();
 
-    res.json({
-      machine_id: currentMachine,
-      products: products.map((p) => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        price: p.final_price,
-        image_url: p.image_url,
-        category: p.category,
-        slot_id: p.slot_id,
-        slot_number: p.slot_number,
-        current_stock: p.current_stock,
-      })),
-    });
+      const { data: products, error } = await supabase
+        .from("slots")
+        .select(
+          `
+          id,
+          slot_number,
+          current_stock,
+          price_override,
+          product_id,
+          products (
+            id,
+            name,
+            description,
+            price,
+            image_url,
+            category,
+            is_active
+          )
+        `
+        )
+        .eq("machine_id", currentMachine)
+        .eq("is_active", true)
+        .gt("current_stock", 0)
+        .order("slot_number", { ascending: true });
+
+      if (error) throw error;
+
+      // Filter out slots where product is not active
+      const activeProducts = products.filter(
+        (slot) => slot.products && slot.products.is_active
+      );
+
+      // Transform data to match expected format
+      const transformedProducts = activeProducts.map((slot) => ({
+        id: slot.products.id,
+        name: slot.products.name,
+        description: slot.products.description,
+        price: slot.products.price,
+        image_url: slot.products.image_url,
+        category: slot.products.category,
+        is_active: slot.products.is_active,
+        slot_id: slot.id,
+        slot_number: slot.slot_number,
+        current_stock: slot.current_stock,
+        final_price: slot.price_override || slot.products.price,
+      }));
+
+      res.json({
+        success: true,
+        data: transformedProducts,
+        count: transformedProducts.length,
+      });
+    } else {
+      // MySQL: Use raw SQL query
+      const products = await db.query(
+        `
+        SELECT 
+          p.*,
+          s.id as slot_id,
+          s.slot_number,
+          s.current_stock,
+          COALESCE(s.price_override, p.price) as final_price
+        FROM products p
+        JOIN slots s ON p.id = s.product_id
+        WHERE p.is_active = 1 
+          AND s.is_active = 1 
+          AND s.current_stock > 0
+          AND s.machine_id = ?
+        ORDER BY s.slot_number ASC
+      `,
+        [currentMachine]
+      );
+
+      res.json({
+        success: true,
+        data: products,
+        count: products.length,
+      });
+    }
   } catch (error) {
     console.error("Get available products error:", error);
     res.status(500).json({
