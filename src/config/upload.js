@@ -14,18 +14,24 @@ if (!fs.existsSync(productsDir)) {
   fs.mkdirSync(productsDir, { recursive: true });
 }
 
-// Configure storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, productsDir);
-  },
-  filename: function (req, file, cb) {
-    // Generate unique filename: product-{timestamp}-{random}.{ext}
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, `product-${uniqueSuffix}${ext}`);
-  },
-});
+// Choose storage based on environment
+const USE_SUPABASE = process.env.USE_SUPABASE === "true";
+
+const storage = USE_SUPABASE
+  ? // Memory storage for Supabase (buffer)
+    multer.memoryStorage()
+  : // Disk storage for MySQL (local files)
+    multer.diskStorage({
+      destination: function (req, file, cb) {
+        cb(null, productsDir);
+      },
+      filename: function (req, file, cb) {
+        // Generate unique filename: product-{timestamp}-{random}.{ext}
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const ext = path.extname(file.originalname);
+        cb(null, `product-${uniqueSuffix}${ext}`);
+      },
+    });
 
 // File filter - only images
 const fileFilter = function (req, file, cb) {

@@ -125,8 +125,100 @@ const supabaseHelpers = {
   },
 };
 
+// Storage helper functions
+const supabaseStorage = {
+  /**
+   * Upload file to Supabase Storage
+   * @param {string} bucket - Bucket name (e.g., 'product-images')
+   * @param {string} filePath - Path in bucket (e.g., 'products/image.jpg')
+   * @param {Buffer|File} file - File to upload
+   * @param {object} options - Upload options
+   * @returns {Promise<{publicUrl: string, path: string}>}
+   */
+  async uploadFile(bucket, filePath, file, options = {}) {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: options.upsert || false,
+        contentType: options.contentType,
+      });
+
+    if (error) throw error;
+
+    // Get public URL
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from(bucket).getPublicUrl(data.path);
+
+    return {
+      publicUrl,
+      path: data.path,
+    };
+  },
+
+  /**
+   * Delete file from Supabase Storage
+   * @param {string} bucket - Bucket name
+   * @param {string} filePath - Path to file in bucket
+   * @returns {Promise<boolean>}
+   */
+  async deleteFile(bucket, filePath) {
+    const { error } = await supabase.storage.from(bucket).remove([filePath]);
+
+    if (error) {
+      console.error("Error deleting file from Supabase Storage:", error);
+      return false;
+    }
+
+    return true;
+  },
+
+  /**
+   * Get public URL for a file
+   * @param {string} bucket - Bucket name
+   * @param {string} filePath - Path to file in bucket
+   * @returns {string} Public URL
+   */
+  getPublicUrl(bucket, filePath) {
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from(bucket).getPublicUrl(filePath);
+
+    return publicUrl;
+  },
+
+  /**
+   * List files in a bucket path
+   * @param {string} bucket - Bucket name
+   * @param {string} path - Path in bucket (optional)
+   * @returns {Promise<Array>}
+   */
+  async listFiles(bucket, path = "") {
+    const { data, error } = await supabase.storage.from(bucket).list(path);
+
+    if (error) throw error;
+    return data;
+  },
+
+  /**
+   * Extract file path from Supabase Storage URL
+   * @param {string} url - Full Supabase Storage URL
+   * @returns {string|null} File path or null if not a Supabase URL
+   */
+  extractPathFromUrl(url) {
+    if (!url) return null;
+
+    // Match Supabase Storage URL pattern
+    // https://{project}.supabase.co/storage/v1/object/public/{bucket}/{path}
+    const match = url.match(/\/storage\/v1\/object\/public\/[^/]+\/(.+)$/);
+    return match ? match[1] : null;
+  },
+};
+
 module.exports = {
   supabase,
   supabaseHelpers,
+  supabaseStorage,
   testConnection,
 };

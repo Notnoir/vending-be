@@ -1,17 +1,36 @@
 const express = require("express");
 const db = require("../config/database");
 const upload = require("../config/upload");
+const { supabaseStorage } = require("../config/supabase");
 const path = require("path");
 const fs = require("fs");
 
 const router = express.Router();
 
+// Supabase Storage bucket name
+const STORAGE_BUCKET = "product-images";
+
 // Get all products (admin - simple list without slots)
 router.get("/all", async (req, res) => {
   try {
-    const products = await db.query(
-      "SELECT * FROM products ORDER BY created_at DESC"
-    );
+    let products;
+
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Get all products
+      const supabase = db.getClient();
+      const { data, error } = await supabase
+        .from("products")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      products = data;
+    } else {
+      // MySQL: Get all products
+      products = await db.query(
+        "SELECT * FROM products ORDER BY created_at DESC"
+      );
+    }
 
     res.json(products);
   } catch (error) {
@@ -252,8 +271,10 @@ router.get("/:id", async (req, res) => {
 
 // Create new product
 router.post("/", upload.single("image"), async (req, res) => {
+  let uploadedFilePath = null;
+
   try {
-    const { name, description, price, category } = req.body;
+    const { name, description, price, category, is_active } = req.body;
 
     // Validation
     if (!name || !price) {
@@ -262,37 +283,98 @@ router.post("/", upload.single("image"), async (req, res) => {
       });
     }
 
-    // Get image URL if uploaded
-    const image_url = req.file
-      ? `/uploads/products/${req.file.filename}`
-      : null;
+    let image_url = null;
 
-    // Insert product
-    const result = await db.query(
-      `
-      INSERT INTO products (name, description, price, image_url, category, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `,
-      [
-        name,
-        description || null,
-        parseFloat(price),
-        image_url,
-        category || "beverage",
-      ]
-    );
+    // Upload image to Supabase Storage if file uploaded
+    if (req.file && process.env.USE_SUPABASE === "true") {
+      try {
+        const timestamp = Date.now();
+        const fileExt = path.extname(req.file.originalname);
+        const fileName = `${timestamp}-${Math.random()
+          .toString(36)
+          .substring(7)}${fileExt}`;
+        const filePath = `products/${fileName}`;
+
+        // Upload to Supabase Storage
+        const { publicUrl, path: storagePath } =
+          await supabaseStorage.uploadFile(
+            STORAGE_BUCKET,
+            filePath,
+            req.file.buffer,
+            {
+              contentType: req.file.mimetype,
+              upsert: false,
+            }
+          );
+
+        image_url = publicUrl;
+        uploadedFilePath = storagePath;
+
+        console.log("✅ Image uploaded to Supabase Storage:", publicUrl);
+      } catch (uploadError) {
+        console.error("❌ Supabase Storage upload failed:", uploadError);
+        throw new Error("Failed to upload image to storage");
+      }
+    } else if (req.file) {
+      // Fallback to local storage for MySQL
+      image_url = `/uploads/products/${req.file.filename}`;
+    }
+
+    const productData = {
+      name,
+      description: description || null,
+      price: parseFloat(price),
+      image_url,
+      category: category || "Minuman",
+      is_active: is_active === "true" || is_active === true,
+    };
+
+    let newProduct;
+
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Insert product
+      const supabase = db.getClient();
+
+      const { data, error } = await supabase
+        .from("products")
+        .insert(productData)
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback: Delete uploaded image if product creation fails
+        if (uploadedFilePath) {
+          await supabaseStorage.deleteFile(STORAGE_BUCKET, uploadedFilePath);
+        }
+        throw error;
+      }
+      newProduct = data;
+    } else {
+      // MySQL: Insert product
+      const result = await db.query(
+        `
+        INSERT INTO products (name, description, price, image_url, category, is_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+        [
+          productData.name,
+          productData.description,
+          productData.price,
+          productData.image_url,
+          productData.category,
+          productData.is_active,
+        ]
+      );
+
+      newProduct = {
+        id: result.insertId,
+        ...productData,
+      };
+    }
 
     res.status(201).json({
       message: "Product created successfully",
-      product: {
-        id: result.insertId,
-        name,
-        description,
-        price: parseFloat(price),
-        image_url,
-        category: category || "beverage",
-        is_active: true,
-      },
+      product: newProduct,
     });
   } catch (error) {
     console.error("Create product error:", error);
@@ -317,90 +399,197 @@ router.post("/", upload.single("image"), async (req, res) => {
 
 // Update product
 router.put("/:id", upload.single("image"), async (req, res) => {
+  let uploadedFilePath = null;
+
   try {
     const { id } = req.params;
     const { name, description, price, category, is_active } = req.body;
 
-    // Check if product exists
-    const existing = await db.query("SELECT * FROM products WHERE id = ?", [
-      id,
-    ]);
+    let oldProduct;
 
-    if (existing.length === 0) {
-      return res.status(404).json({
-        error: "Product not found",
-      });
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Get existing product
+      const supabase = db.getClient();
+      const { data, error } = await supabase
+        .from("products")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error || !data) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+      oldProduct = data;
+    } else {
+      // MySQL: Check if product exists
+      const existing = await db.query("SELECT * FROM products WHERE id = ?", [
+        id,
+      ]);
+
+      if (existing.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+      oldProduct = existing[0];
     }
-
-    const oldProduct = existing[0];
 
     // Prepare update data
     let image_url = oldProduct.image_url;
+    let oldImagePath = null;
 
-    // If new image uploaded, delete old image and use new one
+    // If new image uploaded
     if (req.file) {
-      // Delete old image if exists
-      if (
-        oldProduct.image_url &&
-        oldProduct.image_url.startsWith("/uploads/")
-      ) {
-        const oldFilename = path.basename(oldProduct.image_url);
-        const oldFilePath = path.join(
-          __dirname,
-          "../../uploads/products",
-          oldFilename
-        );
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
-      }
+      if (process.env.USE_SUPABASE === "true") {
+        // Upload new image to Supabase Storage
+        try {
+          const timestamp = Date.now();
+          const fileExt = path.extname(req.file.originalname);
+          const fileName = `${timestamp}-${Math.random()
+            .toString(36)
+            .substring(7)}${fileExt}`;
+          const filePath = `products/${fileName}`;
 
-      image_url = `/uploads/products/${req.file.filename}`;
+          const { publicUrl, path: storagePath } =
+            await supabaseStorage.uploadFile(
+              STORAGE_BUCKET,
+              filePath,
+              req.file.buffer,
+              {
+                contentType: req.file.mimetype,
+                upsert: false,
+              }
+            );
+
+          image_url = publicUrl;
+          uploadedFilePath = storagePath;
+
+          // Extract old image path from Supabase URL for deletion later
+          if (oldProduct.image_url) {
+            oldImagePath = supabaseStorage.extractPathFromUrl(
+              oldProduct.image_url
+            );
+          }
+
+          console.log("✅ New image uploaded to Supabase Storage:", publicUrl);
+        } catch (uploadError) {
+          console.error("❌ Supabase Storage upload failed:", uploadError);
+          throw new Error("Failed to upload image to storage");
+        }
+      } else {
+        // Delete old local image if exists
+        if (
+          oldProduct.image_url &&
+          oldProduct.image_url.startsWith("/uploads/")
+        ) {
+          const oldFilename = path.basename(oldProduct.image_url);
+          const oldFilePath = path.join(
+            __dirname,
+            "../../uploads/products",
+            oldFilename
+          );
+          if (fs.existsSync(oldFilePath)) {
+            fs.unlinkSync(oldFilePath);
+          }
+        }
+
+        image_url = `/uploads/products/${req.file.filename}`;
+      }
     }
 
-    // Update product
-    await db.query(
-      `
-      UPDATE products 
-      SET name = ?, description = ?, price = ?, image_url = ?, category = ?, is_active = ?
-      WHERE id = ?
-    `,
-      [
-        name || oldProduct.name,
+    const updateData = {
+      name: name || oldProduct.name,
+      description:
         description !== undefined ? description : oldProduct.description,
-        price !== undefined ? parseFloat(price) : oldProduct.price,
-        image_url,
-        category || oldProduct.category,
-        is_active !== undefined ? is_active : oldProduct.is_active,
-        id,
-      ]
-    );
+      price: price !== undefined ? parseFloat(price) : oldProduct.price,
+      image_url,
+      category: category || oldProduct.category,
+      is_active:
+        is_active !== undefined
+          ? is_active === "true" || is_active === true
+          : oldProduct.is_active,
+    };
+
+    let updatedProduct;
+
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Update product
+      const supabase = db.getClient();
+
+      const { data, error } = await supabase
+        .from("products")
+        .update(updateData)
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback: Delete newly uploaded image if update fails
+        if (uploadedFilePath) {
+          await supabaseStorage.deleteFile(STORAGE_BUCKET, uploadedFilePath);
+        }
+        throw error;
+      }
+
+      updatedProduct = data;
+
+      // Success: Delete old image from Supabase Storage
+      if (oldImagePath && req.file) {
+        await supabaseStorage.deleteFile(STORAGE_BUCKET, oldImagePath);
+        console.log("✅ Old image deleted from Supabase Storage");
+      }
+    } else {
+      // MySQL: Update product
+      await db.query(
+        `
+        UPDATE products 
+        SET name = ?, description = ?, price = ?, image_url = ?, category = ?, is_active = ?
+        WHERE id = ?
+      `,
+        [
+          updateData.name,
+          updateData.description,
+          updateData.price,
+          updateData.image_url,
+          updateData.category,
+          updateData.is_active,
+          id,
+        ]
+      );
+
+      updatedProduct = {
+        id: parseInt(id),
+        ...updateData,
+      };
+    }
 
     res.json({
       message: "Product updated successfully",
-      product: {
-        id: parseInt(id),
-        name: name || oldProduct.name,
-        description:
-          description !== undefined ? description : oldProduct.description,
-        price: price !== undefined ? parseFloat(price) : oldProduct.price,
-        image_url,
-        category: category || oldProduct.category,
-        is_active: is_active !== undefined ? is_active : oldProduct.is_active,
-      },
+      product: updatedProduct,
     });
   } catch (error) {
     console.error("Update product error:", error);
 
-    // Delete uploaded file if update failed
+    // Rollback: Delete uploaded file if update failed
     if (req.file) {
-      const filePath = path.join(
-        __dirname,
-        "../../uploads/products",
-        req.file.filename
-      );
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      if (process.env.USE_SUPABASE === "true" && uploadedFilePath) {
+        // Delete from Supabase Storage
+        await supabaseStorage.deleteFile(STORAGE_BUCKET, uploadedFilePath);
+        console.log(
+          "🔄 Rolled back: Deleted uploaded image from Supabase Storage"
+        );
+      } else if (req.file.filename) {
+        // Delete from local filesystem
+        const filePath = path.join(
+          __dirname,
+          "../../uploads/products",
+          req.file.filename
+        );
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
       }
     }
 
@@ -415,26 +604,72 @@ router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get product to delete image
-    const product = await db.query("SELECT * FROM products WHERE id = ?", [id]);
+    let product;
 
-    if (product.length === 0) {
-      return res.status(404).json({
-        error: "Product not found",
-      });
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Get product
+      const supabase = db.getClient();
+      const { data, error } = await supabase
+        .from("products")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error || !data) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+      product = data;
+    } else {
+      // MySQL: Get product to delete image
+      const result = await db.query("SELECT * FROM products WHERE id = ?", [
+        id,
+      ]);
+
+      if (result.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+      product = result[0];
     }
 
-    // Delete image if exists
-    if (product[0].image_url && product[0].image_url.startsWith("/uploads/")) {
-      const filename = path.basename(product[0].image_url);
-      const filePath = path.join(__dirname, "../../uploads/products", filename);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+    // Delete image
+    if (product.image_url) {
+      if (process.env.USE_SUPABASE === "true") {
+        // Delete from Supabase Storage
+        const imagePath = supabaseStorage.extractPathFromUrl(product.image_url);
+        if (imagePath) {
+          await supabaseStorage.deleteFile(STORAGE_BUCKET, imagePath);
+          console.log("✅ Image deleted from Supabase Storage:", imagePath);
+        }
+      } else {
+        // Delete local file
+        if (product.image_url.startsWith("/uploads/")) {
+          const filename = path.basename(product.image_url);
+          const filePath = path.join(
+            __dirname,
+            "../../uploads/products",
+            filename
+          );
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        }
       }
     }
 
-    // Delete product
-    await db.query("DELETE FROM products WHERE id = ?", [id]);
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Delete product
+      const supabase = db.getClient();
+      const { error } = await supabase.from("products").delete().eq("id", id);
+
+      if (error) throw error;
+    } else {
+      // MySQL: Delete product
+      await db.query("DELETE FROM products WHERE id = ?", [id]);
+    }
 
     res.json({
       message: "Product deleted successfully",
