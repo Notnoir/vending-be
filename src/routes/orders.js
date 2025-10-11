@@ -237,54 +237,107 @@ router.get("/:order_id", async (req, res) => {
   try {
     const { order_id } = req.params;
 
-    const order = await db.query(
-      `
-      SELECT o.*, p.name as product_name, s.slot_number,
-             pay.status as payment_status, pay.processed_at
-      FROM orders o
-      JOIN products p ON o.product_id = p.id
-      JOIN slots s ON o.slot_id = s.id
-      LEFT JOIN payments pay ON o.id = pay.order_id
-      WHERE o.id = ?
-    `,
-      [order_id]
-    );
+    if (process.env.USE_SUPABASE === "true") {
+      // Supabase: Get order with relations
+      const supabase = db.getClient();
 
-    if (order.length === 0) {
-      return res.status(404).json({
-        error: "Order not found",
+      const { data: order, error } = await supabase
+        .from("orders")
+        .select(
+          `
+          *,
+          products (
+            name
+          ),
+          slots (
+            slot_number
+          ),
+          payments (
+            status,
+            processed_at
+          )
+        `
+        )
+        .eq("order_id", order_id)
+        .single();
+
+      if (error || !order) {
+        return res.status(404).json({
+          error: "Order not found",
+        });
+      }
+
+      // Check if order expired
+      if (order.status === "PENDING" && moment().isAfter(order.expires_at)) {
+        await supabase
+          .from("orders")
+          .update({ status: "FAILED" })
+          .eq("order_id", order_id);
+        order.status = "FAILED";
+      }
+
+      res.json({
+        order_id: order.order_id,
+        machine_id: order.machine_id,
+        product_name: order.products?.name || "Unknown",
+        slot_number: order.slots?.slot_number || 0,
+        quantity: order.quantity,
+        total_amount: order.total_amount,
+        status: order.status,
+        payment_status: order.payments?.[0]?.status || null,
+        payment_processed_at: order.payments?.[0]?.processed_at || null,
+        created_at: order.created_at,
+        expires_at: order.expires_at,
+      });
+    } else {
+      // MySQL: Original query
+      const order = await db.query(
+        `
+        SELECT o.*, p.name as product_name, s.slot_number,
+               pay.status as payment_status, pay.processed_at
+        FROM orders o
+        JOIN products p ON o.product_id = p.id
+        JOIN slots s ON o.slot_id = s.id
+        LEFT JOIN payments pay ON o.id = pay.order_id
+        WHERE o.order_id = ?
+      `,
+        [order_id]
+      );
+
+      if (order.length === 0) {
+        return res.status(404).json({
+          error: "Order not found",
+        });
+      }
+
+      const orderInfo = order[0];
+
+      // Check if order expired
+      if (
+        orderInfo.status === "PENDING" &&
+        moment().isAfter(orderInfo.expires_at)
+      ) {
+        await db.query(
+          'UPDATE orders SET status = "FAILED" WHERE order_id = ?',
+          [order_id]
+        );
+        orderInfo.status = "FAILED";
+      }
+
+      res.json({
+        order_id: orderInfo.order_id,
+        machine_id: orderInfo.machine_id,
+        product_name: orderInfo.product_name,
+        slot_number: orderInfo.slot_number,
+        quantity: orderInfo.quantity,
+        total_amount: orderInfo.total_amount,
+        status: orderInfo.status,
+        payment_status: orderInfo.payment_status,
+        payment_processed_at: orderInfo.processed_at,
+        created_at: orderInfo.created_at,
+        expires_at: orderInfo.expires_at,
       });
     }
-
-    const orderInfo = order[0];
-
-    // Check if order expired
-    if (
-      orderInfo.status === "PENDING" &&
-      moment().isAfter(orderInfo.expires_at)
-    ) {
-      await db.query('UPDATE orders SET status = "FAILED" WHERE id = ?', [
-        order_id,
-      ]);
-      orderInfo.status = "FAILED";
-    }
-
-    res.json({
-      order_id: orderInfo.id,
-      machine_id: orderInfo.machine_id,
-      product_name: orderInfo.product_name,
-      slot_number: orderInfo.slot_number,
-      quantity: orderInfo.quantity,
-      total_amount: orderInfo.total_amount,
-      status: orderInfo.status,
-      payment_status: orderInfo.payment_status,
-      payment_method: orderInfo.payment_method,
-      payment_url: orderInfo.payment_url,
-      expires_at: orderInfo.expires_at,
-      paid_at: orderInfo.paid_at,
-      dispensed_at: orderInfo.dispensed_at,
-      created_at: orderInfo.created_at,
-    });
   } catch (error) {
     console.error("Get order error:", error);
     res.status(500).json({

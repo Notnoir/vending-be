@@ -57,6 +57,7 @@ app.use("/api/dispense", require("./routes/dispense"));
 app.use("/api/stock", require("./routes/stock"));
 app.use("/api/telemetry", require("./routes/telemetry"));
 app.use("/api/upload", require("./routes/upload"));
+app.use("/api/debug", require("./routes/debug")); // Debug endpoints for testing
 
 // 404 handler
 app.use("*", (req, res) => {
