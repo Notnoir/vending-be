@@ -21,12 +21,33 @@ const limiter = rateLimit({
 app.use("/api/", limiter);
 
 // CORS configuration
+const allowedOrigins =
+  process.env.NODE_ENV === "production"
+    ? [
+        process.env.FRONTEND_URL || "https://vending-fe.vercel.app",
+        "https://vending-machine-frontend.vercel.app", // Add your actual frontend URL
+      ]
+    : [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://192.168.100.17:3000", // Mobile dev
+      ];
+
 app.use(
   cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? ["http://localhost:3000"] // Add your production domain
-        : ["http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, Postman, etc)
+      if (!origin) return callback(null, true);
+
+      if (
+        allowedOrigins.indexOf(origin) !== -1 ||
+        process.env.NODE_ENV !== "production"
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
