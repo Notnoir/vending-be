@@ -345,6 +345,66 @@ router.post("/verify/:order_id", async (req, res) => {
   }
 });
 
+// Update payment method
+router.patch("/method/:order_id", async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    const { payment_method } = req.body;
+
+    if (!payment_method) {
+      return res.status(400).json({
+        error: "payment_method is required",
+      });
+    }
+
+    const validMethods = ["qris", "va", "gopay", "shopeepay", "midtrans"];
+    if (!validMethods.includes(payment_method)) {
+      return res.status(400).json({
+        error: "Invalid payment method",
+        valid_methods: validMethods,
+      });
+    }
+
+    console.log("🔄 Updating payment method:", {
+      order_id,
+      payment_method,
+    });
+
+    if (USE_SUPABASE) {
+      const { error } = await supabase
+        .from("payments")
+        .update({ payment_type: payment_method })
+        .eq("order_id", order_id);
+
+      if (error) {
+        console.error("❌ Failed to update payment method:", error);
+        return res.status(500).json({
+          error: "Failed to update payment method",
+        });
+      }
+
+      console.log("✅ Payment method updated successfully");
+    } else {
+      await db.query(
+        `UPDATE payments SET payment_type = ? WHERE order_id = ?`,
+        [payment_method, order_id]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: "Payment method updated",
+      order_id,
+      payment_method,
+    });
+  } catch (error) {
+    console.error("Update payment method error:", error);
+    res.status(500).json({
+      error: "Failed to update payment method",
+    });
+  }
+});
+
 // Get payment details
 router.get("/:order_id", async (req, res) => {
   try {

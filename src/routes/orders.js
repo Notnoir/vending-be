@@ -17,6 +17,10 @@ const validateOrder = [
     .optional()
     .isMobilePhone("id-ID")
     .withMessage("Valid Indonesian phone number required"),
+  body("payment_method")
+    .optional()
+    .isIn(["qris", "va", "gopay", "shopeepay"])
+    .withMessage("Invalid payment method"),
 ];
 
 // Create new order
@@ -30,7 +34,12 @@ router.post("/", validateOrder, async (req, res) => {
       });
     }
 
-    const { slot_id, quantity = 1, customer_phone } = req.body;
+    const {
+      slot_id,
+      quantity = 1,
+      customer_phone,
+      payment_method = "qris",
+    } = req.body;
     const machine_id = process.env.MACHINE_ID || "VM01";
 
     // DEBUG: Log received data
@@ -38,6 +47,7 @@ router.post("/", validateOrder, async (req, res) => {
       slot_id,
       quantity,
       customer_phone,
+      payment_method,
       machine_id,
     });
 
@@ -164,7 +174,7 @@ router.post("/", validateOrder, async (req, res) => {
         order_id,
         gateway_name: "midtrans",
         amount: total_amount,
-        payment_type: "qris",
+        payment_type: payment_method, // Use dynamic payment method
         status: "PENDING",
       });
 
@@ -206,9 +216,9 @@ router.post("/", validateOrder, async (req, res) => {
       await db.query(
         `
         INSERT INTO payments (order_id, gateway_name, amount, payment_type)
-        VALUES (?, 'midtrans', ?, 'qris')
+        VALUES (?, 'midtrans', ?, ?)
       `,
-        [order_id, total_amount]
+        [order_id, total_amount, payment_method]
       );
     }
 
@@ -258,7 +268,7 @@ router.get("/:order_id", async (req, res) => {
           )
         `
         )
-        .eq("order_id", order_id)
+        .eq("id", order_id)
         .single();
 
       if (error || !order) {
@@ -272,12 +282,12 @@ router.get("/:order_id", async (req, res) => {
         await supabase
           .from("orders")
           .update({ status: "FAILED" })
-          .eq("order_id", order_id);
+          .eq("id", order_id);
         order.status = "FAILED";
       }
 
       res.json({
-        order_id: order.order_id,
+        order_id: order.id,
         machine_id: order.machine_id,
         product_name: order.products?.name || "Unknown",
         slot_number: order.slots?.slot_number || 0,
