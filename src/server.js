@@ -5,6 +5,9 @@ const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
+// Initialize MQTT Service
+const mqttService = require("./services/mqttService");
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -118,6 +121,24 @@ app.listen(PORT, () => {
   console.log(`🚀 Vending Machine Backend running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(
+    `📡 MQTT Service: ${
+      mqttService.isConnected ? "Connected" : "Initializing..."
+    }`
+  );
+});
+
+// Graceful shutdown
+process.on("SIGINT", () => {
+  console.log("\n🛑 Shutting down gracefully...");
+  mqttService.close();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  console.log("\n🛑 Shutting down gracefully...");
+  mqttService.close();
+  process.exit(0);
 });
 
 module.exports = app;

@@ -1,4 +1,5 @@
 const express = require("express");
+const axios = require("axios");
 const db = require("../config/database");
 const { supabase } = require("../config/supabase");
 
@@ -127,11 +128,57 @@ router.post("/webhook", async (req, res) => {
 
     // If payment successful, trigger dispense process
     if (payment_status === "SUCCESS") {
-      // Here you would trigger MQTT message to Pi/ESP32
-      // This will be implemented in the MQTT service
+      // Trigger dispense via internal API call
       console.log(
         `💰 Payment successful for order ${order_id} - triggering dispense`
       );
+
+      try {
+        // Call internal dispense endpoint
+        const dispenseUrl = `http://localhost:${
+          process.env.PORT || 3001
+        }/api/dispense/trigger`;
+
+        await axios.post(
+          dispenseUrl,
+          {
+            order_id: order_id,
+          },
+          {
+            timeout: 5000,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        console.log(`✅ Dispense triggered successfully for order ${order_id}`);
+      } catch (dispenseError) {
+        console.error(
+          `❌ Failed to trigger dispense for order ${order_id}:`,
+          dispenseError.message
+        );
+
+        // Log the error but don't fail the webhook
+        // The order is already marked as PAID, dispense can be retried later
+        if (USE_SUPABASE) {
+          await supabase
+            .from("orders")
+            .update({
+              status: "PENDING_DISPENSE",
+              notes: `Payment successful but dispense failed: ${dispenseError.message}`,
+            })
+            .eq("id", order_id);
+        } else {
+          await db.query(
+            `UPDATE orders SET status = 'PENDING_DISPENSE', notes = ? WHERE id = ?`,
+            [
+              `Payment successful but dispense failed: ${dispenseError.message}`,
+              order_id,
+            ]
+          );
+        }
+      }
     }
 
     res.json({
@@ -152,9 +199,14 @@ router.post("/verify/:order_id", async (req, res) => {
     const { order_id } = req.params;
     const { status = "SUCCESS" } = req.body;
 
+    console.log("💳 ========== PAYMENT VERIFICATION START ==========");
+    console.log("💳 Order ID:", order_id);
+    console.log("💳 Status:", status);
+
     let order;
 
     if (USE_SUPABASE) {
+      console.log("🔍 Checking order in Supabase...");
       // Supabase: Check if order exists
       const { data, error } = await supabase
         .from("orders")
@@ -162,12 +214,20 @@ router.post("/verify/:order_id", async (req, res) => {
         .eq("id", order_id)
         .single();
 
+      console.log("📊 Supabase result:", { data, error });
+
       if (error || !data) {
+        console.log("❌ Order not found");
         return res.status(404).json({
           error: "Order not found",
         });
       }
       order = data;
+      console.log("✅ Order found:", {
+        id: order.id,
+        status: order.status,
+        machine_id: order.machine_id,
+      });
     } else {
       // MySQL: Check if order exists
       const result = await db.query("SELECT * FROM orders WHERE id = ?", [
@@ -182,6 +242,7 @@ router.post("/verify/:order_id", async (req, res) => {
     }
 
     if (order.status !== "PENDING" && order.status !== "PAID") {
+      console.log(`⚠️ Order status is ${order.status}, cannot verify`);
       return res.status(400).json({
         error: "Order is not in pending or paid status",
         current_status: order.status,
@@ -190,6 +251,7 @@ router.post("/verify/:order_id", async (req, res) => {
 
     // If already PAID, just return success (idempotent)
     if (order.status === "PAID") {
+      console.log("ℹ️ Order already PAID, returning success");
       return res.json({
         success: true,
         message: "Order already verified and paid",
@@ -201,12 +263,17 @@ router.post("/verify/:order_id", async (req, res) => {
     const payment_status = status === "SUCCESS" ? "SUCCESS" : "FAILED";
     const order_status = status === "SUCCESS" ? "PAID" : "FAILED";
 
+    console.log("📝 Updating payment and order status...");
+    console.log("📝 New payment_status:", payment_status);
+    console.log("📝 New order_status:", order_status);
+
     if (USE_SUPABASE) {
       // Supabase: Update payment and order
       const now = new Date().toISOString();
 
+      console.log("💾 Updating payment...");
       // Update payment
-      await supabase
+      const { error: paymentError } = await supabase
         .from("payments")
         .update({
           status: payment_status,
@@ -214,6 +281,13 @@ router.post("/verify/:order_id", async (req, res) => {
         })
         .eq("order_id", order_id);
 
+      if (paymentError) {
+        console.error("❌ Payment update error:", paymentError);
+      } else {
+        console.log("✅ Payment updated");
+      }
+
+      console.log("💾 Updating order...");
       // Update order
       const orderUpdate = {
         status: order_status,
@@ -222,7 +296,16 @@ router.post("/verify/:order_id", async (req, res) => {
         orderUpdate.paid_at = now;
       }
 
-      await supabase.from("orders").update(orderUpdate).eq("id", order_id);
+      const { error: orderError } = await supabase
+        .from("orders")
+        .update(orderUpdate)
+        .eq("id", order_id);
+
+      if (orderError) {
+        console.error("❌ Order update error:", orderError);
+      } else {
+        console.log("✅ Order updated to status:", order_status);
+      }
     } else {
       // MySQL: Use transaction
       await db.transaction(async (connection) => {
@@ -247,12 +330,14 @@ router.post("/verify/:order_id", async (req, res) => {
       });
     }
 
+    console.log("✅ ========== PAYMENT VERIFICATION SUCCESS ==========");
     res.json({
       order_id,
       status: order_status,
       message: `Payment ${status.toLowerCase()} processed`,
     });
   } catch (error) {
+    console.error("❌ ========== PAYMENT VERIFICATION ERROR ==========");
     console.error("Payment verification error:", error);
     res.status(500).json({
       error: "Failed to verify payment",

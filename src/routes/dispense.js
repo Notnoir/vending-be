@@ -2,21 +2,11 @@ const express = require("express");
 const { body, validationResult } = require("express-validator");
 const db = require("../config/database");
 const { supabase } = require("../config/supabase");
-// const mqttService = require("../services/mqttService"); // Disabled for now
+const mqttService = require("../services/mqttService");
 
 const USE_SUPABASE = process.env.USE_SUPABASE === "true";
 
-// Mock MQTT service for testing
-const mockMqttService = {
-  publishDispenseCommand: () => {
-    return { success: true, message: "Mock dispensing command sent" };
-  },
-};
-
 const router = express.Router();
-
-// MQTT service will be implemented here
-// For now, we'll create a mock dispense system
 
 // Validate dispense request
 const validateDispense = [
@@ -35,7 +25,11 @@ router.post("/trigger", async (req, res) => {
   try {
     const { order_id } = req.body;
 
+    console.log("🎰 ========== DISPENSE TRIGGER START ==========");
+    console.log("🎰 Order ID:", order_id);
+
     if (!order_id) {
+      console.log("❌ No order_id provided");
       return res.status(400).json({
         error: "Order ID is required",
       });
@@ -44,6 +38,7 @@ router.post("/trigger", async (req, res) => {
     let orderInfo;
 
     if (USE_SUPABASE) {
+      console.log("🔍 Fetching order from Supabase...");
       // Supabase: Get order with slot details
       const { data, error } = await supabase
         .from("orders")
@@ -60,7 +55,29 @@ router.post("/trigger", async (req, res) => {
         .eq("status", "PAID")
         .single();
 
+      console.log("📊 Supabase query result:", { data, error });
+
       if (error || !data) {
+        console.log("❌ Order not found or not PAID status");
+
+        // Check if order exists with different status
+        const { data: anyOrder, error: checkError } = await supabase
+          .from("orders")
+          .select("id, status")
+          .eq("id", order_id)
+          .single();
+
+        console.log("🔍 Order check result:", { anyOrder, checkError });
+
+        if (anyOrder) {
+          console.log(`⚠️ Order exists but status is: ${anyOrder.status}`);
+          return res.status(400).json({
+            error: `Order status is ${anyOrder.status}, not PAID`,
+            order_id,
+            status: anyOrder.status,
+          });
+        }
+
         return res.status(404).json({
           error: "Order not found or not paid",
         });
@@ -71,7 +88,16 @@ router.post("/trigger", async (req, res) => {
         slot_number: data.slot.slot_number,
         motor_duration_ms: data.slot.motor_duration_ms,
       };
+
+      console.log("✅ Order found:", {
+        order_id: orderInfo.id,
+        status: orderInfo.status,
+        machine_id: orderInfo.machine_id,
+        slot_number: orderInfo.slot_number,
+        motor_duration_ms: orderInfo.motor_duration_ms,
+      });
     } else {
+      console.log("🔍 Fetching order from MySQL...");
       // MySQL: Get order details
       const order = await db.query(
         `
@@ -83,29 +109,47 @@ router.post("/trigger", async (req, res) => {
         [order_id]
       );
 
+      console.log("📊 MySQL query result:", order);
+
       if (order.length === 0) {
+        console.log("❌ Order not found or not PAID status");
         return res.status(404).json({
           error: "Order not found or not paid",
         });
       }
 
       orderInfo = order[0];
+      console.log("✅ Order found:", orderInfo);
     }
 
+    console.log("📝 Updating order status to DISPENSING...");
     if (USE_SUPABASE) {
       // Supabase: Update order status to dispensing
-      await supabase
+      const { error: updateError } = await supabase
         .from("orders")
         .update({ status: "DISPENSING" })
         .eq("id", order_id);
 
+      if (updateError) {
+        console.error("❌ Failed to update order status:", updateError);
+      } else {
+        console.log("✅ Order status updated to DISPENSING");
+      }
+
       // Supabase: Create dispense log
-      await supabase.from("dispense_logs").insert({
+      console.log("📝 Creating dispense log...");
+      const { error: logError } = await supabase.from("dispense_logs").insert({
         order_id: order_id,
         machine_id: orderInfo.machine_id,
         slot_number: orderInfo.slot_number,
         command_sent_at: new Date().toISOString(),
       });
+
+      if (logError) {
+        console.error("❌ Failed to create dispense log:", logError);
+      } else {
+        console.log("✅ Dispense log created");
+      }
     } else {
       // MySQL: Update order status to dispensing
       await db.query(
@@ -130,21 +174,53 @@ router.post("/trigger", async (req, res) => {
       cmd: "dispense",
       slot: orderInfo.slot_number,
       orderId: order_id,
-      timeoutMs: orderInfo.motor_duration_ms || 1500,
+      timeoutMs: orderInfo.motor_duration_ms || 2150,
     };
 
-    console.log("🎰 Sending dispense command:", dispenseCommand);
+    console.log("📡 Preparing to send MQTT command...");
+    console.log(
+      "📡 Dispense command:",
+      JSON.stringify(dispenseCommand, null, 2)
+    );
+    console.log("📡 Target machine ID:", orderInfo.machine_id);
+    console.log("📡 MQTT service connected:", mqttService.isConnected);
 
-    // Send MQTT command to ESP32 (using mock for testing)
-    const mqttSent = mockMqttService.publishDispenseCommand(
+    // Send MQTT command to ESP32
+    const mqttSent = mqttService.publishDispenseCommand(
       orderInfo.machine_id,
       dispenseCommand
     );
 
+    console.log("📡 MQTT publish result:", mqttSent);
+
     if (!mqttSent) {
-      console.warn("⚠️  MQTT not available, dispense command not sent");
+      console.error("❌ MQTT not connected, dispense command not sent");
+      console.error("❌ MQTT service state:", {
+        isConnected: mqttService.isConnected,
+        hasClient: !!mqttService.client,
+      });
+
+      // Update order status to PENDING_DISPENSE if MQTT failed
+      if (USE_SUPABASE) {
+        await supabase
+          .from("orders")
+          .update({ status: "PENDING_DISPENSE" })
+          .eq("id", order_id);
+      } else {
+        await db.query(
+          `UPDATE orders SET status = 'PENDING_DISPENSE' WHERE id = ?`,
+          [order_id]
+        );
+      }
+
+      return res.status(503).json({
+        error: "MQTT service unavailable",
+        message: "Dispense command could not be sent. Please retry later.",
+        order_id,
+      });
     }
 
+    console.log("✅ ========== DISPENSE TRIGGER SUCCESS ==========");
     res.json({
       order_id,
       slot_number: orderInfo.slot_number,

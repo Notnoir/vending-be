@@ -1,6 +1,7 @@
 const express = require("express");
 const { supabase } = require("../config/supabase");
 const db = require("../config/database");
+const mqttService = require("../services/mqttService");
 
 const router = express.Router();
 const USE_SUPABASE = process.env.USE_SUPABASE === "true";
@@ -194,6 +195,104 @@ router.get("/pending-payments", async (req, res) => {
     }
   } catch (error) {
     console.error("❌ Get pending payments error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// MQTT Status and Testing Endpoints
+router.get("/mqtt/status", (req, res) => {
+  res.json({
+    success: true,
+    mqtt: {
+      connected: mqttService.isConnected,
+      broker: process.env.MQTT_BROKER_URL || "mqtt://localhost:1883",
+      machineId: process.env.MACHINE_ID || "VM01",
+    },
+  });
+});
+
+// Test MQTT publish (send test command to ESP32)
+router.post("/mqtt/test-command", (req, res) => {
+  try {
+    const machineId = req.body.machineId || process.env.MACHINE_ID || "VM01";
+    const testCommand = {
+      cmd: "test",
+      timestamp: new Date().toISOString(),
+      message: "Test command from backend",
+    };
+
+    if (!mqttService.isConnected) {
+      return res.status(503).json({
+        success: false,
+        error: "MQTT not connected",
+      });
+    }
+
+    const published = mqttService.publishDispenseCommand(
+      machineId,
+      testCommand
+    );
+
+    res.json({
+      success: published,
+      command: testCommand,
+      topic: `vm/${machineId}/command`,
+      message: published
+        ? "Test command published successfully"
+        : "Failed to publish command",
+    });
+  } catch (error) {
+    console.error("❌ MQTT test command error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Simulate ESP32 dispense result (for testing without actual ESP32)
+router.post("/mqtt/simulate-dispense-result", async (req, res) => {
+  try {
+    const {
+      orderId,
+      slot = 1,
+      success = true,
+      dropDetected = true,
+      durationMs = 1850,
+      error = null,
+    } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: "orderId is required",
+      });
+    }
+
+    const machineId = process.env.MACHINE_ID || "VM01";
+
+    // Manually call the handler that would normally be triggered by MQTT
+    const result = {
+      orderId,
+      slot,
+      success,
+      dropDetected,
+      durationMs,
+      error,
+    };
+
+    await mqttService.handleDispenseResult(machineId, result);
+
+    res.json({
+      success: true,
+      message: "Dispense result simulated successfully",
+      result,
+    });
+  } catch (error) {
+    console.error("❌ Simulate dispense result error:", error);
     res.status(500).json({
       success: false,
       error: error.message,
