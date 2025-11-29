@@ -19,10 +19,13 @@ class PrescriptionScanService {
       }
 
       this.genAI = new GoogleGenerativeAI(apiKey);
+      // Use gemini-2.5-flash which supports both text and vision
       this.model = this.genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash",
       });
-      console.log("✅ Prescription Scan Service initialized");
+      console.log(
+        "✅ Prescription Scan Service initialized (gemini-2.5-flash with vision)"
+      );
     } catch (error) {
       console.error("Failed to initialize Prescription Scan Service:", error);
     }
