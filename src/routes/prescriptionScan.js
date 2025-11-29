@@ -424,6 +424,35 @@ router.post("/upload", upload.single("prescription"), async (req, res) => {
       });
     }
 
+    // Check if session exists and is valid
+    const sessionData = prescriptionScanService.getSession(session);
+    if (!sessionData) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found or expired",
+      });
+    }
+
+    // Check if session already completed (prevent re-upload)
+    if (sessionData.status === "completed") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Session already completed. Please scan QR again for new upload.",
+      });
+    }
+
+    // Check upload count (max 3 attempts per session)
+    if (sessionData.uploadCount >= sessionData.maxUploads) {
+      return res.status(429).json({
+        success: false,
+        message: "Maximum upload attempts reached. Please scan QR again.",
+      });
+    }
+
+    // Increment upload count
+    sessionData.uploadCount++;
+
     if (!req.file) {
       return res.status(400).json({
         success: false,

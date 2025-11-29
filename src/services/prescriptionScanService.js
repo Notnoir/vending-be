@@ -38,6 +38,8 @@ class PrescriptionScanService {
       createdAt: new Date(),
       result: null,
       error: null,
+      uploadCount: 0, // Track upload attempts
+      maxUploads: 3, // Max 3 upload attempts per session
     });
 
     // Auto cleanup after 10 minutes

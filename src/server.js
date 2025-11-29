@@ -29,17 +29,19 @@ const allowedOrigins =
     ? [
         process.env.FRONTEND_URL || "https://vending-fe.vercel.app",
         "https://vending-machine-frontend.vercel.app", // Add your actual frontend URL
+        process.env.BACKEND_URL || "https://vending-be.onrender.com", // Allow same-origin for mobile upload
       ]
     : [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://192.168.100.17:3000", // Mobile dev
+        "http://localhost:3001", // Backend self
       ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, Postman, etc)
+      // Allow requests with no origin (mobile apps, Postman, etc, direct browser access)
       if (!origin) return callback(null, true);
 
       if (
@@ -48,6 +50,11 @@ app.use(
       ) {
         callback(null, true);
       } else {
+        // In production, also allow if origin matches backend URL
+        const backendUrl = process.env.BACKEND_URL || "";
+        if (origin.startsWith(backendUrl)) {
+          return callback(null, true);
+        }
         callback(new Error("Not allowed by CORS"));
       }
     },
