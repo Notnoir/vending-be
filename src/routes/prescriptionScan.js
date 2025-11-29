@@ -122,6 +122,12 @@ router.get("/upload", (req, res) => {
     return res.status(400).send("Session ID required");
   }
 
+  // Set Content Security Policy to allow inline scripts
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;"
+  );
+
   const html = `
     <!DOCTYPE html>
     <html lang="id">
@@ -291,13 +297,19 @@ router.get("/upload", (req, res) => {
         const statusDiv = document.getElementById('status');
 
         fileInput.addEventListener('change', (e) => {
+          console.log('File input changed');
           const file = e.target.files[0];
+          
           if (!file) {
+            console.log('No file selected');
             uploadBtn.disabled = true;
             return;
           }
 
+          console.log('File selected:', file.name, file.type, file.size);
+
           if (!file.type.startsWith('image/')) {
+            console.log('Invalid file type');
             showStatus('error', '❌ Hanya file gambar yang diizinkan!');
             uploadBtn.disabled = true;
             fileInput.value = '';
@@ -305,37 +317,54 @@ router.get("/upload", (req, res) => {
           }
 
           if (file.size > 10 * 1024 * 1024) {
+            console.log('File too large');
             showStatus('error', '❌ Ukuran file maksimal 10MB!');
             uploadBtn.disabled = true;
             fileInput.value = '';
             return;
           }
+
+          console.log('File valid, enabling button');
           
+          // Enable button immediately after validation
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Upload Resep';
+          uploadBtn.style.background = '#667eea';
+          uploadBtn.style.cursor = 'pointer';
+          statusDiv.style.display = 'none';
+          
+          // Show preview (optional, button already enabled)
           const reader = new FileReader();
           reader.onload = (e) => {
+            console.log('Preview loaded');
             previewImg.src = e.target.result;
             preview.style.display = 'block';
-            uploadBtn.disabled = false;
-            uploadBtn.textContent = 'Upload Resep';
-            uploadBtn.style.background = '#667eea';
+          };
+          reader.onerror = (e) => {
+            console.error('FileReader error:', e);
           };
           reader.readAsDataURL(file);
-
-          statusDiv.style.display = 'none';
         });
 
-        uploadBtn.addEventListener('click', async () => {
+        uploadBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          console.log('Upload button clicked');
+          
           const file = fileInput.files[0];
           if (!file) {
+            console.log('No file to upload');
             showStatus('error', '❌ Pilih foto terlebih dahulu!');
             return;
           }
+
+          console.log('Preparing to upload:', file.name);
 
           const formData = new FormData();
           formData.append('prescription', file);
 
           uploadBtn.disabled = true;
           uploadBtn.textContent = 'Mengupload...';
+          uploadBtn.style.cursor = 'not-allowed';
           showStatus('loading', '⏳ Mengupload...');
 
           try {
