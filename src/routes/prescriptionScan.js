@@ -289,42 +289,53 @@ router.get("/upload", (req, res) => {
         const preview = document.getElementById('preview');
         const previewImg = document.getElementById('previewImg');
         const statusDiv = document.getElementById('status');
-        let selectedFile = null;
 
         fileInput.addEventListener('change', (e) => {
           const file = e.target.files[0];
-          if (!file) return;
+          if (!file) {
+            uploadBtn.disabled = true;
+            return;
+          }
 
           if (!file.type.startsWith('image/')) {
             showStatus('error', '❌ Hanya file gambar yang diizinkan!');
+            uploadBtn.disabled = true;
+            fileInput.value = '';
             return;
           }
 
           if (file.size > 10 * 1024 * 1024) {
             showStatus('error', '❌ Ukuran file maksimal 10MB!');
+            uploadBtn.disabled = true;
+            fileInput.value = '';
             return;
           }
-
-          selectedFile = file;
           
           const reader = new FileReader();
           reader.onload = (e) => {
             previewImg.src = e.target.result;
             preview.style.display = 'block';
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload Resep';
+            uploadBtn.style.background = '#667eea';
           };
           reader.readAsDataURL(file);
 
-          uploadBtn.disabled = false;
           statusDiv.style.display = 'none';
         });
 
         uploadBtn.addEventListener('click', async () => {
-          if (!selectedFile) return;
+          const file = fileInput.files[0];
+          if (!file) {
+            showStatus('error', '❌ Pilih foto terlebih dahulu!');
+            return;
+          }
 
           const formData = new FormData();
-          formData.append('prescription', selectedFile);
+          formData.append('prescription', file);
 
           uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Mengupload...';
           showStatus('loading', '⏳ Mengupload...');
 
           try {
@@ -337,14 +348,21 @@ router.get("/upload", (req, res) => {
 
             if (data.success) {
               showStatus('success', '✅ Upload berhasil! Silakan kembali ke vending machine.');
+              uploadBtn.textContent = 'Upload Berhasil ✓';
+              uploadBtn.style.background = '#28a745';
               fileInput.disabled = true;
             } else {
               showStatus('error', '❌ Upload gagal: ' + (data.message || 'Coba lagi'));
               uploadBtn.disabled = false;
+              uploadBtn.textContent = 'Coba Upload Lagi';
+              uploadBtn.style.background = '#dc3545';
             }
           } catch (error) {
+            console.error('Upload error:', error);
             showStatus('error', '❌ Koneksi gagal. Coba lagi.');
             uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Coba Upload Lagi';
+            uploadBtn.style.background = '#dc3545';
           }
         });
 
