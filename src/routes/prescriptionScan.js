@@ -127,101 +127,100 @@ router.get("/upload", (req, res) => {
     <html lang="id">
     <head>
       <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Upload Resep Dokter</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+      <title>Upload Resep</title>
       <style>
         * {
           margin: 0;
           padding: 0;
           box-sizing: border-box;
+          -webkit-tap-highlight-color: transparent;
         }
         body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          min-height: 100vh;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #667eea;
           padding: 20px;
+          min-height: 100vh;
         }
         .container {
           background: white;
-          border-radius: 20px;
-          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-          padding: 30px;
+          border-radius: 15px;
+          padding: 25px;
           max-width: 500px;
-          width: 100%;
+          margin: 0 auto;
         }
         h1 {
           color: #667eea;
+          font-size: 22px;
+          margin-bottom: 8px;
           text-align: center;
-          margin-bottom: 10px;
-          font-size: 24px;
         }
-        p {
-          text-align: center;
+        .subtitle {
           color: #666;
-          margin-bottom: 30px;
-          line-height: 1.6;
-        }
-        .upload-area {
-          border: 3px dashed #667eea;
-          border-radius: 15px;
-          padding: 40px 20px;
+          font-size: 14px;
           text-align: center;
-          cursor: pointer;
-          transition: all 0.3s;
-          margin-bottom: 20px;
+          margin-bottom: 25px;
         }
-        .upload-area:hover {
-          background: #f8f9ff;
-          border-color: #764ba2;
-        }
-        .upload-area.dragover {
-          background: #f0f4ff;
-          border-color: #764ba2;
-        }
-        .upload-icon {
-          font-size: 48px;
-          margin-bottom: 10px;
+        .file-input-wrapper {
+          position: relative;
+          margin-bottom: 15px;
         }
         input[type="file"] {
+          width: 100%;
+          padding: 15px;
+          border: 2px solid #667eea;
+          border-radius: 10px;
+          font-size: 16px;
+          cursor: pointer;
+          background: white;
+        }
+        input[type="file"]::file-selector-button {
+          background: #667eea;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 5px;
+          cursor: pointer;
+          font-weight: bold;
+          margin-right: 10px;
+        }
+        .preview {
+          margin: 15px 0;
+          text-align: center;
           display: none;
+        }
+        .preview img {
+          max-width: 100%;
+          max-height: 300px;
+          border-radius: 10px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         button {
           width: 100%;
           padding: 15px;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: #667eea;
           color: white;
           border: none;
           border-radius: 10px;
           font-size: 16px;
           font-weight: bold;
           cursor: pointer;
-          transition: transform 0.2s;
+          margin-bottom: 15px;
         }
-        button:hover {
-          transform: translateY(-2px);
+        button:active {
+          background: #5568d3;
         }
         button:disabled {
-          opacity: 0.5;
+          background: #ccc;
           cursor: not-allowed;
         }
-        .preview {
-          margin: 20px 0;
-          text-align: center;
-        }
-        .preview img {
-          max-width: 100%;
-          border-radius: 10px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
         .status {
-          margin-top: 20px;
-          padding: 15px;
-          border-radius: 10px;
+          padding: 12px;
+          border-radius: 8px;
           text-align: center;
-          font-weight: bold;
+          font-size: 14px;
+          display: none;
+          margin-bottom: 15px;
         }
         .status.success {
           background: #d4edda;
@@ -237,59 +236,54 @@ router.get("/upload", (req, res) => {
         }
         .tips {
           background: #f8f9fa;
-          border-radius: 10px;
-          padding: 15px;
-          margin-top: 20px;
+          border-radius: 8px;
+          padding: 12px;
+          font-size: 13px;
         }
         .tips h3 {
           color: #667eea;
-          font-size: 16px;
-          margin-bottom: 10px;
+          font-size: 14px;
+          margin-bottom: 8px;
         }
         .tips ul {
-          margin-left: 20px;
+          margin-left: 18px;
           color: #666;
-          font-size: 14px;
         }
         .tips li {
-          margin-bottom: 5px;
+          margin-bottom: 4px;
         }
       </style>
     </head>
     <body>
       <div class="container">
         <h1>📋 Upload Resep Dokter</h1>
-        <p>Ambil foto resep dokter Anda dan upload di sini. Pastikan foto jelas dan dapat terbaca.</p>
+        <p class="subtitle">Pilih foto resep dari galeri atau ambil foto baru</p>
         
-        <div class="upload-area" id="uploadArea">
-          <div class="upload-icon">📸</div>
-          <p><strong>Klik atau Drag & Drop</strong><br>untuk upload foto resep</p>
-          <input type="file" id="fileInput" accept="image/jpeg,image/jpg,image/png" capture="environment">
+        <div class="file-input-wrapper">
+          <input type="file" id="fileInput" accept="image/*">
         </div>
 
-        <div class="preview" id="preview" style="display: none;">
-          <img id="previewImg" src="" alt="Preview">
+        <div class="preview" id="preview">
+          <img id="previewImg" alt="Preview">
         </div>
+
+        <div id="status" class="status"></div>
 
         <button id="uploadBtn" disabled>Upload Resep</button>
 
-        <div id="status"></div>
-
         <div class="tips">
-          <h3>💡 Tips untuk foto yang bagus:</h3>
+          <h3>💡 Tips Foto Bagus:</h3>
           <ul>
-            <li>Pastikan pencahayaan cukup terang</li>
-            <li>Foto dari atas (tegak lurus)</li>
-            <li>Pastikan semua teks terlihat jelas</li>
-            <li>Hindari bayangan pada resep</li>
-            <li>Gunakan latar belakang kontras</li>
+            <li>Pencahayaan terang</li>
+            <li>Foto tegak lurus dari atas</li>
+            <li>Semua teks terlihat jelas</li>
+            <li>Tidak ada bayangan</li>
           </ul>
         </div>
       </div>
 
       <script>
         const sessionId = '${session}';
-        const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
         const preview = document.getElementById('preview');
@@ -297,48 +291,22 @@ router.get("/upload", (req, res) => {
         const statusDiv = document.getElementById('status');
         let selectedFile = null;
 
-        // Click to select file
-        uploadArea.addEventListener('click', () => fileInput.click());
-
-        // Drag & Drop
-        uploadArea.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', () => {
-          uploadArea.classList.remove('dragover');
-        });
-
-        uploadArea.addEventListener('drop', (e) => {
-          e.preventDefault();
-          uploadArea.classList.remove('dragover');
-          const files = e.dataTransfer.files;
-          if (files.length > 0) {
-            handleFile(files[0]);
-          }
-        });
-
         fileInput.addEventListener('change', (e) => {
-          if (e.target.files.length > 0) {
-            handleFile(e.target.files[0]);
-          }
-        });
+          const file = e.target.files[0];
+          if (!file) return;
 
-        function handleFile(file) {
-          if (!file.type.match('image/jpeg|image/jpg|image/png')) {
-            showStatus('error', 'Hanya file JPG, JPEG, atau PNG yang diizinkan!');
+          if (!file.type.startsWith('image/')) {
+            showStatus('error', '❌ Hanya file gambar yang diizinkan!');
             return;
           }
 
           if (file.size > 10 * 1024 * 1024) {
-            showStatus('error', 'Ukuran file maksimal 10MB!');
+            showStatus('error', '❌ Ukuran file maksimal 10MB!');
             return;
           }
 
           selectedFile = file;
           
-          // Show preview
           const reader = new FileReader();
           reader.onload = (e) => {
             previewImg.src = e.target.result;
@@ -347,8 +315,8 @@ router.get("/upload", (req, res) => {
           reader.readAsDataURL(file);
 
           uploadBtn.disabled = false;
-          statusDiv.innerHTML = '';
-        }
+          statusDiv.style.display = 'none';
+        });
 
         uploadBtn.addEventListener('click', async () => {
           if (!selectedFile) return;
@@ -357,7 +325,7 @@ router.get("/upload", (req, res) => {
           formData.append('prescription', selectedFile);
 
           uploadBtn.disabled = true;
-          showStatus('loading', '⏳ Mengupload dan memproses resep...');
+          showStatus('loading', '⏳ Mengupload...');
 
           try {
             const response = await fetch('/api/prescription-scan/upload?session=' + sessionId, {
@@ -368,17 +336,14 @@ router.get("/upload", (req, res) => {
             const data = await response.json();
 
             if (data.success) {
-              showStatus('success', '✅ Resep berhasil diupload! Sedang memproses...');
-              setTimeout(() => {
-                showStatus('success', '✅ Selesai! Silakan kembali ke layar vending machine.');
-              }, 2000);
+              showStatus('success', '✅ Upload berhasil! Silakan kembali ke vending machine.');
+              fileInput.disabled = true;
             } else {
-              showStatus('error', '❌ ' + (data.message || 'Upload gagal'));
+              showStatus('error', '❌ Upload gagal: ' + (data.message || 'Coba lagi'));
               uploadBtn.disabled = false;
             }
           } catch (error) {
-            console.error('Upload error:', error);
-            showStatus('error', '❌ Terjadi kesalahan. Silakan coba lagi.');
+            showStatus('error', '❌ Koneksi gagal. Coba lagi.');
             uploadBtn.disabled = false;
           }
         });
