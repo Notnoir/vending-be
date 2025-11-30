@@ -1,6 +1,4 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const fs = require("fs").promises;
-const path = require("path");
 
 class PrescriptionScanService {
   constructor() {
@@ -58,8 +56,8 @@ class PrescriptionScanService {
     return this.sessions.get(sessionId);
   }
 
-  // Process prescription image with OCR
-  async processPrescription(sessionId, imagePath) {
+  // Process prescription image from memory buffer (no disk storage)
+  async processPrescriptionFromBuffer(sessionId, imageBuffer, mimeType) {
     try {
       const session = this.sessions.get(sessionId);
       if (!session) {
@@ -73,9 +71,8 @@ class PrescriptionScanService {
         throw new Error("Gemini model not initialized");
       }
 
-      // Read image file
-      const imageData = await fs.readFile(imagePath);
-      const base64Image = imageData.toString("base64");
+      // Convert buffer directly to base64 (no disk I/O)
+      const base64Image = imageBuffer.toString("base64");
 
       // Prepare prompt for OCR
       const prompt = `Kamu adalah asisten farmasi yang ahli dalam membaca resep dokter.
@@ -116,7 +113,7 @@ Berikan output dalam format JSON yang valid.`;
         prompt,
         {
           inlineData: {
-            mimeType: "image/jpeg",
+            mimeType: mimeType || "image/jpeg",
             data: base64Image,
           },
         },
@@ -152,16 +149,14 @@ Berikan output dalam format JSON yang valid.`;
         confidence: prescriptionData.parseError ? "low" : "high",
       };
 
-      // Delete uploaded file after processing
-      try {
-        await fs.unlink(imagePath);
-      } catch (err) {
-        console.error("Failed to delete uploaded file:", err);
-      }
+      // No file cleanup needed - image never saved to disk!
+      console.log(
+        `✅ Prescription processed from memory for session ${sessionId}`
+      );
 
       return session.result;
     } catch (error) {
-      console.error("Error processing prescription:", error);
+      console.error("Error processing prescription from buffer:", error);
 
       const session = this.sessions.get(sessionId);
       if (session) {
@@ -173,34 +168,82 @@ Berikan output dalam format JSON yang valid.`;
     }
   }
 
+  // Legacy method - kept for backward compatibility but deprecated
+  async processPrescription(sessionId, imagePath) {
+    throw new Error(
+      "File-based processing is deprecated. Use processPrescriptionFromBuffer instead."
+    );
+  }
+
   // Find matching products from prescription
   async findMatchingProducts(medications, availableProducts) {
     const matches = [];
 
+    console.log("🔍 Finding matches for medications:", medications.length);
+    console.log("📦 Available products:", availableProducts.length);
+
     for (const med of medications) {
       if (!med.name) continue;
 
-      const medName = med.name.toLowerCase();
+      const medName = med.name.toLowerCase().trim();
+      console.log(`\n🔎 Searching for: "${medName}"`);
 
       // Find products that match the medication name
       const matchedProducts = availableProducts.filter((product) => {
-        const productName = product.name.toLowerCase();
-        return (
-          productName.includes(medName) ||
-          medName.includes(productName) ||
-          this.calculateSimilarity(productName, medName) > 0.7
-        );
+        const productName = product.name.toLowerCase().trim();
+
+        // Direct match
+        if (productName.includes(medName) || medName.includes(productName)) {
+          console.log(`  ✅ Direct match: "${product.name}"`);
+          return true;
+        }
+
+        // Similarity match
+        const similarity = this.calculateSimilarity(productName, medName);
+        if (similarity > 0.6) {
+          console.log(
+            `  ✅ Similarity match (${(similarity * 100).toFixed(0)}%): "${
+              product.name
+            }"`
+          );
+          return true;
+        }
+
+        // Check if medication name contains product name or vice versa (partial match)
+        const medWords = medName.split(/\s+/);
+        const prodWords = productName.split(/\s+/);
+
+        for (const medWord of medWords) {
+          for (const prodWord of prodWords) {
+            if (medWord.length > 3 && prodWord.length > 3) {
+              if (medWord.includes(prodWord) || prodWord.includes(medWord)) {
+                console.log(
+                  `  ✅ Word match: "${medWord}" ~ "${prodWord}" in "${product.name}"`
+                );
+                return true;
+              }
+            }
+          }
+        }
+
+        return false;
       });
 
       if (matchedProducts.length > 0) {
+        console.log(
+          `  ✨ Found ${matchedProducts.length} product(s) for "${med.name}"`
+        );
         matches.push({
           medication: med,
           products: matchedProducts,
           matchType: "direct",
         });
+      } else {
+        console.log(`  ❌ No products found for "${med.name}"`);
       }
     }
 
+    console.log(`\n📊 Total matches: ${matches.length}/${medications.length}`);
     return matches;
   }
 

@@ -1,38 +1,24 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
 const QRCode = require("qrcode");
 const prescriptionScanService = require("../services/prescriptionScanService");
 const supabase = require("../config/supabase");
 
-// Configure multer for file upload
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/prescriptions/");
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, "prescription-" + uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
+// Configure multer for memory storage (no disk write)
 const upload = multer({
-  storage: storage,
+  storage: multer.memoryStorage(), // Store in memory buffer instead of disk
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB max
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png/;
-    const extname = allowedTypes.test(
-      path.extname(file.originalname).toLowerCase()
-    );
     const mimetype = allowedTypes.test(file.mimetype);
 
-    if (mimetype && extname) {
+    if (mimetype) {
       return cb(null, true);
     } else {
-      cb(new Error("Only .png, .jpg and .jpeg format allowed!"));
+      cb(new Error("Only image files are allowed!"));
     }
   },
 });
@@ -83,7 +69,7 @@ router.post("/create-session", async (req, res) => {
  * @desc    Check scan session status
  * @access  Public
  */
-router.get("/status/:sessionId", (req, res) => {
+router.get("/status/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
     const session = prescriptionScanService.getSession(sessionId);
@@ -95,10 +81,102 @@ router.get("/status/:sessionId", (req, res) => {
       });
     }
 
+    let products = [];
+    let unavailableCount = 0;
+
+    // If completed, find matching products
+    if (session.status === "completed" && session.result?.prescription) {
+      try {
+        // Get available products from database
+        const machineId = process.env.MACHINE_ID || "VM01";
+        const { data: productsData, error } = await supabase.supabase
+          .from("products")
+          .select(
+            `
+            id,
+            name,
+            description,
+            price,
+            category,
+            image_url,
+            slots!inner (
+              id,
+              slot_number,
+              current_stock,
+              capacity,
+              price_override,
+              is_active
+            )
+          `
+          )
+          .eq("is_active", true)
+          .eq("slots.machine_id", machineId)
+          .eq("slots.is_active", true)
+          .gt("slots.current_stock", 0);
+
+        if (!error && productsData) {
+          const availableProducts = productsData.map((product) => {
+            const slot = product.slots[0];
+            return {
+              id: product.id,
+              name: product.name,
+              description: product.description,
+              price: slot?.price_override || product.price,
+              category: product.category,
+              image_url: product.image_url,
+              slot_id: slot?.id,
+              slot_number: slot?.slot_number,
+              current_stock: slot?.current_stock,
+              final_price: slot?.price_override || product.price,
+            };
+          });
+
+          // Find matching products
+          const medications = session.result.prescription.medications || [];
+          console.log(
+            "🔍 Searching for medications:",
+            medications.map((m) => m.name)
+          );
+
+          const matches = await prescriptionScanService.findMatchingProducts(
+            medications,
+            availableProducts
+          );
+
+          console.log("✅ Found matches:", matches.length);
+          matches.forEach((match) => {
+            console.log(
+              `  - ${match.medication.name}: ${match.products.length} product(s)`
+            );
+          });
+
+          // Extract all matched products (flatten the array since each match can have multiple products)
+          products = matches.flatMap((m) => m.products || []);
+          console.log("📦 Total products to return:", products.length);
+
+          // Count unique medications that were matched vs total medications
+          const matchedMedications = new Set(
+            matches.map((m) => m.medication.name)
+          );
+          unavailableCount = medications.length - matchedMedications.size;
+          console.log(
+            `📊 Matched: ${matchedMedications.size}/${medications.length}, Unavailable: ${unavailableCount}`
+          );
+        }
+      } catch (error) {
+        console.error("Error finding products:", error);
+        // Continue without products on error
+      }
+    }
+
     return res.json({
       success: true,
       status: session.status,
-      result: session.result,
+      result: {
+        ...session.result,
+        products,
+        unavailableCount,
+      },
       error: session.error,
     });
   } catch (error) {
@@ -460,9 +538,13 @@ router.post("/upload", upload.single("prescription"), async (req, res) => {
       });
     }
 
-    // Process prescription asynchronously
+    // Process prescription from memory buffer (no disk storage)
     prescriptionScanService
-      .processPrescription(session, req.file.path)
+      .processPrescriptionFromBuffer(
+        session,
+        req.file.buffer,
+        req.file.mimetype
+      )
       .catch((err) => {
         console.error("Error processing prescription:", err);
       });
