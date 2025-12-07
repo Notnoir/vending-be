@@ -236,22 +236,51 @@ class MqttService {
         // Supabase implementation
         const { supabase } = require("../config/supabase");
 
-        console.log("💾 Updating dispense log...");
-        // Update dispense log
-        await supabase
+        console.log("💾 Checking if dispense log exists...");
+        
+        // Check if dispense log already exists
+        const { data: existingLog } = await supabase
           .from("dispense_logs")
-          .update({
-            completed_at: new Date().toISOString(),
-            success: success,
-            drop_detected: dropDetected,
-            duration_ms: durationMs,
-            error_message: errorMsg,
-          })
+          .select("id")
           .eq("order_id", orderId)
           .eq("machine_id", machineId)
-          .eq("slot_number", slot);
+          .eq("slot_number", slot)
+          .single();
 
-        console.log("✅ Dispense log updated");
+        if (existingLog) {
+          // Update existing log
+          console.log("💾 Updating existing dispense log...");
+          await supabase
+            .from("dispense_logs")
+            .update({
+              completed_at: new Date().toISOString(),
+              success: success,
+              drop_detected: dropDetected,
+              duration_ms: durationMs,
+              error_message: errorMsg,
+            })
+            .eq("order_id", orderId)
+            .eq("machine_id", machineId)
+            .eq("slot_number", slot);
+          console.log("✅ Dispense log updated");
+        } else {
+          // Create new log (for mobile-initiated dispense)
+          console.log("💾 Creating new dispense log (mobile-initiated)...");
+          await supabase
+            .from("dispense_logs")
+            .insert({
+              order_id: orderId,
+              machine_id: machineId,
+              slot_number: slot,
+              command_sent_at: new Date().toISOString(),
+              completed_at: new Date().toISOString(),
+              success: success,
+              drop_detected: dropDetected,
+              duration_ms: durationMs,
+              error_message: errorMsg,
+            });
+          console.log("✅ Dispense log created");
+        }
 
         if (orderStatus === "COMPLETED") {
           console.log("🔄 Processing stock update...");
@@ -314,24 +343,53 @@ class MqttService {
         console.log("✅ Order status updated");
       } else {
         // MySQL implementation
-        // Update dispense log
-        await db.query(
-          `
-          UPDATE dispense_logs 
-          SET completed_at = NOW(), success = ?, drop_detected = ?, 
-              duration_ms = ?, error_message = ?
-          WHERE order_id = ? AND machine_id = ? AND slot_number = ?
-        `,
-          [
-            success,
-            dropDetected,
-            durationMs,
-            errorMsg,
-            orderId,
-            machineId,
-            slot,
-          ]
+        
+        // Check if dispense log exists
+        const existingLog = await db.query(
+          `SELECT id FROM dispense_logs 
+           WHERE order_id = ? AND machine_id = ? AND slot_number = ?`,
+          [orderId, machineId, slot]
         );
+
+        if (existingLog && existingLog.length > 0) {
+          // Update existing dispense log
+          await db.query(
+            `
+            UPDATE dispense_logs 
+            SET completed_at = NOW(), success = ?, drop_detected = ?, 
+                duration_ms = ?, error_message = ?
+            WHERE order_id = ? AND machine_id = ? AND slot_number = ?
+          `,
+            [
+              success,
+              dropDetected,
+              durationMs,
+              errorMsg,
+              orderId,
+              machineId,
+              slot,
+            ]
+          );
+        } else {
+          // Create new dispense log (for mobile-initiated dispense)
+          await db.query(
+            `
+            INSERT INTO dispense_logs 
+            (order_id, machine_id, slot_number, command_sent_at, completed_at, 
+             success, drop_detected, duration_ms, error_message)
+            VALUES (?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)
+          `,
+            [
+              orderId,
+              machineId,
+              slot,
+              success,
+              dropDetected,
+              durationMs,
+              errorMsg,
+            ]
+          );
+        }
 
         // Update order status
         // Note: For testing without physical sensor, we rely on success flag only
