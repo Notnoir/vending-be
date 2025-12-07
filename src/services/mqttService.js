@@ -223,8 +223,10 @@ class MqttService {
       });
 
       // Determine order status FIRST (before any database operations)
+      // Note: For testing without physical sensor, we rely on success flag only
+      // In production with sensor, change to: success && dropDetected
       let orderStatus = "FAILED";
-      if (success && dropDetected) {
+      if (success) {
         orderStatus = "COMPLETED";
       }
 
@@ -332,8 +334,10 @@ class MqttService {
         );
 
         // Update order status
+        // Note: For testing without physical sensor, we rely on success flag only
+        // In production with sensor, change to: success && dropDetected
         let orderStatus = "FAILED";
-        if (success && dropDetected) {
+        if (success) {
           orderStatus = "COMPLETED";
 
           // Update stock
