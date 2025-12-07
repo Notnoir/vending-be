@@ -237,7 +237,7 @@ class MqttService {
         const { supabase } = require("../config/supabase");
 
         console.log("💾 Checking if dispense log exists...");
-        
+
         // Check if dispense log already exists
         const { data: existingLog } = await supabase
           .from("dispense_logs")
@@ -266,19 +266,17 @@ class MqttService {
         } else {
           // Create new log (for mobile-initiated dispense)
           console.log("💾 Creating new dispense log (mobile-initiated)...");
-          await supabase
-            .from("dispense_logs")
-            .insert({
-              order_id: orderId,
-              machine_id: machineId,
-              slot_number: slot,
-              command_sent_at: new Date().toISOString(),
-              completed_at: new Date().toISOString(),
-              success: success,
-              drop_detected: dropDetected,
-              duration_ms: durationMs,
-              error_message: errorMsg,
-            });
+          await supabase.from("dispense_logs").insert({
+            order_id: orderId,
+            machine_id: machineId,
+            slot_number: slot,
+            command_sent_at: new Date().toISOString(),
+            completed_at: new Date().toISOString(),
+            success: success,
+            drop_detected: dropDetected,
+            duration_ms: durationMs,
+            error_message: errorMsg,
+          });
           console.log("✅ Dispense log created");
         }
 
@@ -343,7 +341,7 @@ class MqttService {
         console.log("✅ Order status updated");
       } else {
         // MySQL implementation
-        
+
         // Check if dispense log exists
         const existingLog = await db.query(
           `SELECT id FROM dispense_logs 
