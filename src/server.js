@@ -80,6 +80,24 @@ app.get("/health", (req, res) => {
 
 // API Routes
 app.use("/api/auth", require("./routes/auth").router);
+
+// Load new routes with error handling
+try {
+  const usersRouter = require("./routes/users");
+  app.use("/api/users", usersRouter);
+  console.log("✅ Users route loaded");
+} catch (error) {
+  console.error("❌ Failed to load users route:", error.message);
+}
+
+try {
+  const machineDataRouter = require("./routes/machine-data");
+  app.use("/api/machine-data", machineDataRouter);
+  console.log("✅ Machine-data route loaded");
+} catch (error) {
+  console.error("❌ Failed to load machine-data route:", error.message);
+}
+
 app.use("/api/machines", require("./routes/machines"));
 app.use("/api/products", require("./routes/products"));
 app.use("/api/orders", require("./routes/orders"));
