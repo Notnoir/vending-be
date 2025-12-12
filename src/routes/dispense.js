@@ -424,6 +424,233 @@ router.get("/logs/:machine_id", async (req, res) => {
   }
 });
 
+// Trigger multi-item dispense (sequential dispensing)
+router.post("/multi", async (req, res) => {
+  try {
+    const { order_id } = req.body;
+
+    console.log("🎰 ========== MULTI-ITEM DISPENSE START ==========");
+    console.log("🎰 Order ID:", order_id);
+
+    if (!order_id) {
+      return res.status(400).json({
+        error: "Order ID is required",
+      });
+    }
+
+    // Get all items for this order
+    let orderItems;
+    let machineId;
+
+    if (USE_SUPABASE) {
+      // Get order info
+      const { data: orderData } = await supabase
+        .from("orders")
+        .select("machine_id, status")
+        .eq("id", order_id)
+        .single();
+
+      if (!orderData) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (orderData.status !== "PAID") {
+        return res.status(400).json({
+          error: "Order must be in PAID status",
+          currentStatus: orderData.status,
+        });
+      }
+
+      machineId = orderData.machine_id;
+
+      // Get order items with slot details
+      const { data: items, error: itemsError } = await supabase
+        .from("order_items")
+        .select(
+          `
+          *,
+          slot:slots (
+            slot_number,
+            motor_duration_ms
+          )
+        `
+        )
+        .eq("order_id", order_id);
+
+      if (itemsError) {
+        console.error("❌ Error fetching order items:", itemsError);
+        return res.status(500).json({
+          error: "Failed to fetch order items",
+          details: itemsError.message,
+        });
+      }
+
+      console.log(
+        `🔍 Fetched ${items?.length || 0} items from order_items table`
+      );
+      orderItems = items;
+    } else {
+      // MySQL
+      const orderData = await db.query(
+        "SELECT machine_id, status FROM orders WHERE id = ?",
+        [order_id]
+      );
+
+      if (orderData.length === 0) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (orderData[0].status !== "PAID") {
+        return res.status(400).json({
+          error: "Order must be in PAID status",
+          currentStatus: orderData[0].status,
+        });
+      }
+
+      machineId = orderData[0].machine_id;
+
+      const items = await db.query(
+        `SELECT oi.*, s.slot_number, s.motor_duration_ms
+         FROM order_items oi
+         JOIN slots s ON oi.slot_id = s.id
+         WHERE oi.order_id = ?`,
+        [order_id]
+      );
+
+      orderItems = items;
+    }
+
+    if (!orderItems || orderItems.length === 0) {
+      return res.status(404).json({ error: "No items found for this order" });
+    }
+
+    console.log(`📦 Found ${orderItems.length} items to dispense`);
+
+    // Update order status to DISPENSING
+    if (USE_SUPABASE) {
+      await supabase
+        .from("orders")
+        .update({ status: "DISPENSING" })
+        .eq("id", order_id);
+    } else {
+      await db.query("UPDATE orders SET status = 'DISPENSING' WHERE id = ?", [
+        order_id,
+      ]);
+    }
+
+    // Send MQTT commands for each item sequentially
+    const results = [];
+    for (let i = 0; i < orderItems.length; i++) {
+      const item = orderItems[i];
+      const slotNumber = USE_SUPABASE
+        ? item.slot.slot_number
+        : item.slot_number;
+      const motorDuration = USE_SUPABASE
+        ? item.slot.motor_duration_ms
+        : item.motor_duration_ms;
+
+      console.log(
+        `📤 [${i + 1}/${
+          orderItems.length
+        }] Dispensing from slot ${slotNumber}...`
+      );
+
+      // Update item status to DISPENSING
+      if (USE_SUPABASE) {
+        await supabase
+          .from("order_items")
+          .update({ dispense_status: "DISPENSING" })
+          .eq("id", item.id);
+      } else {
+        await db.query(
+          "UPDATE order_items SET dispense_status = 'DISPENSING' WHERE id = ?",
+          [item.id]
+        );
+      }
+
+      // Create dispense log
+      if (USE_SUPABASE) {
+        await supabase.from("dispense_logs").insert({
+          order_id,
+          machine_id: machineId,
+          slot_number: slotNumber,
+          command_sent_at: new Date().toISOString(),
+        });
+      } else {
+        await db.query(
+          `INSERT INTO dispense_logs (order_id, machine_id, slot_number, command_sent_at)
+           VALUES (?, ?, ?, NOW())`,
+          [order_id, machineId, slotNumber]
+        );
+      }
+
+      // Send MQTT command
+      const dispenseCommand = {
+        cmd: "dispense",
+        slot: slotNumber,
+        orderId: order_id,
+        itemIndex: i,
+        totalItems: orderItems.length,
+        timeoutMs: motorDuration || 2150,
+      };
+
+      const mqttSent = mqttService.publishDispenseCommand(
+        machineId,
+        dispenseCommand
+      );
+
+      if (!mqttSent) {
+        console.error(`❌ MQTT failed for slot ${slotNumber}`);
+        results.push({
+          slot: slotNumber,
+          success: false,
+          error: "MQTT unavailable",
+        });
+
+        // Update item to failed
+        if (USE_SUPABASE) {
+          await supabase
+            .from("order_items")
+            .update({ dispense_status: "FAILED" })
+            .eq("id", item.id);
+        } else {
+          await db.query(
+            "UPDATE order_items SET dispense_status = 'FAILED' WHERE id = ?",
+            [item.id]
+          );
+        }
+      } else {
+        console.log(`✅ MQTT command sent for slot ${slotNumber}`);
+        results.push({
+          slot: slotNumber,
+          success: true,
+        });
+      }
+
+      // Wait a bit before next dispense (optional, depends on your hardware)
+      if (i < orderItems.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    console.log("✅ ========== MULTI-ITEM DISPENSE COMPLETE ==========");
+
+    res.json({
+      order_id,
+      total_items: orderItems.length,
+      results,
+      status: "DISPENSING",
+      message: "Multi-item dispense commands sent",
+    });
+  } catch (error) {
+    console.error("Multi-item dispense error:", error);
+    res.status(500).json({
+      error: "Failed to trigger multi-item dispense",
+      details: error.message,
+    });
+  }
+});
+
 // Get current dispense status
 router.get("/status/:order_id", async (req, res) => {
   try {

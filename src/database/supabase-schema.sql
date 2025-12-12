@@ -78,6 +78,23 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 -- ============================================
+-- ORDER ITEMS TABLE (for multi-item orders)
+-- ============================================
+CREATE TABLE IF NOT EXISTS order_items (
+  id SERIAL PRIMARY KEY,
+  order_id VARCHAR(100) NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  slot_id INTEGER NOT NULL REFERENCES slots(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  product_name VARCHAR(100) NOT NULL,
+  quantity INTEGER NOT NULL DEFAULT 1,
+  unit_price DECIMAL(10,2) NOT NULL,
+  total DECIMAL(10,2) NOT NULL,
+  dispense_status VARCHAR(20) DEFAULT 'PENDING' CHECK (dispense_status IN ('PENDING', 'DISPENSING', 'COMPLETED', 'FAILED')),
+  dispensed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================
 -- PAYMENTS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS payments (
@@ -190,6 +207,7 @@ ALTER TABLE machines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispense_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_logs ENABLE ROW LEVEL SECURITY;
@@ -221,6 +239,10 @@ CREATE POLICY "Service role has full access to orders"
   ON orders FOR ALL
   USING (auth.role() = 'service_role');
 
+CREATE POLICY "Service role has full access to order_items"
+  ON order_items FOR ALL
+  USING (auth.role() = 'service_role');
+
 CREATE POLICY "Service role has full access to payments"
   ON payments FOR ALL
   USING (auth.role() = 'service_role');
@@ -247,6 +269,8 @@ CREATE POLICY "Service role has full access to admin_users"
 CREATE INDEX IF NOT EXISTS idx_orders_machine_id ON orders(machine_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
 CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
 CREATE INDEX IF NOT EXISTS idx_slots_machine_id ON slots(machine_id);
 CREATE INDEX IF NOT EXISTS idx_stock_logs_slot_id ON stock_logs(slot_id);

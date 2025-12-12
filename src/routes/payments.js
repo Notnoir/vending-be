@@ -134,10 +134,47 @@ router.post("/webhook", async (req, res) => {
       );
 
       try {
-        // Call internal dispense endpoint
+        // Check if this is a multi-item order
+        let hasMultipleItems = false;
+        let itemCount = 0;
+        
+        if (USE_SUPABASE) {
+          const { data: items, error } = await supabase
+            .from("order_items")
+            .select("*")
+            .eq("order_id", order_id);
+          
+          console.log(`🔍 Supabase order_items query result:`, {
+            itemsFound: items?.length || 0,
+            hasError: !!error,
+            error: error?.message,
+          });
+          
+          hasMultipleItems = items && items.length > 0;
+          itemCount = items?.length || 0;
+        } else {
+          const items = await db.query(
+            "SELECT * FROM order_items WHERE order_id = ?",
+            [order_id]
+          );
+          
+          console.log(`🔍 MySQL order_items query result:`, {
+            itemsFound: items?.length || 0,
+          });
+          
+          hasMultipleItems = items && items.length > 0;
+          itemCount = items?.length || 0;
+        }
+
+        // Choose the appropriate dispense endpoint
+        const dispenseEndpoint = hasMultipleItems ? "/multi" : "/trigger";
         const dispenseUrl = `http://localhost:${
           process.env.PORT || 3001
-        }/api/dispense/trigger`;
+        }/api/dispense${dispenseEndpoint}`;
+
+        console.log(`📦 Order ${order_id} has ${itemCount} items`);
+        console.log(`📦 Triggering ${hasMultipleItems ? 'multi-item' : 'single'} dispense...`);
+        console.log(`📦 Endpoint: ${dispenseUrl}`);
 
         await axios.post(
           dispenseUrl,
@@ -145,7 +182,7 @@ router.post("/webhook", async (req, res) => {
             order_id: order_id,
           },
           {
-            timeout: 5000,
+            timeout: 10000, // Increased timeout for multi-item
             headers: {
               "Content-Type": "application/json",
             },
@@ -328,6 +365,98 @@ router.post("/verify/:order_id", async (req, res) => {
           [order_status, order_id]
         );
       });
+    }
+
+    // If payment successful, trigger dispense process
+    if (payment_status === "SUCCESS") {
+      console.log(
+        `💰 Payment verified for order ${order_id} - triggering dispense`
+      );
+
+      try {
+        // Check if this is a multi-item order
+        let hasMultipleItems = false;
+        let itemCount = 0;
+
+        if (USE_SUPABASE) {
+          const { data: items, error } = await supabase
+            .from("order_items")
+            .select("*")
+            .eq("order_id", order_id);
+
+          console.log(`🔍 Supabase order_items query result:`, {
+            itemsFound: items?.length || 0,
+            hasError: !!error,
+            error: error?.message,
+          });
+
+          hasMultipleItems = items && items.length > 0;
+          itemCount = items?.length || 0;
+        } else {
+          const items = await db.query(
+            "SELECT * FROM order_items WHERE order_id = ?",
+            [order_id]
+          );
+
+          console.log(`🔍 MySQL order_items query result:`, {
+            itemsFound: items?.length || 0,
+          });
+
+          hasMultipleItems = items && items.length > 0;
+          itemCount = items?.length || 0;
+        }
+
+        // Choose the appropriate dispense endpoint
+        const dispenseEndpoint = hasMultipleItems ? "/multi" : "/trigger";
+        const dispenseUrl = `http://localhost:${
+          process.env.PORT || 3001
+        }/api/dispense${dispenseEndpoint}`;
+
+        console.log(`📦 Order ${order_id} has ${itemCount} items`);
+        console.log(
+          `📦 Triggering ${hasMultipleItems ? "multi-item" : "single"} dispense...`
+        );
+        console.log(`📦 Endpoint: ${dispenseUrl}`);
+
+        await axios.post(
+          dispenseUrl,
+          {
+            order_id: order_id,
+          },
+          {
+            timeout: 10000, // Increased timeout for multi-item
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        console.log(`✅ Dispense triggered successfully for order ${order_id}`);
+      } catch (dispenseError) {
+        console.error(
+          `❌ Failed to trigger dispense for order ${order_id}:`,
+          dispenseError.message
+        );
+
+        // Log the error but don't fail the verification
+        if (USE_SUPABASE) {
+          await supabase
+            .from("orders")
+            .update({
+              status: "PENDING_DISPENSE",
+              notes: `Payment successful but dispense failed: ${dispenseError.message}`,
+            })
+            .eq("id", order_id);
+        } else {
+          await db.query(
+            `UPDATE orders SET status = 'PENDING_DISPENSE', notes = ? WHERE id = ?`,
+            [
+              `Payment successful but dispense failed: ${dispenseError.message}`,
+              order_id,
+            ]
+          );
+        }
+      }
     }
 
     console.log("✅ ========== PAYMENT VERIFICATION SUCCESS ==========");

@@ -23,6 +23,254 @@ const validateOrder = [
     .withMessage("Invalid payment method"),
 ];
 
+// Validation for multi-item orders
+const validateMultiItemOrder = [
+  body("items")
+    .isArray({ min: 1, max: 10 })
+    .withMessage("Items must be an array with 1-10 items"),
+  body("items.*.slot_id")
+    .isInt({ min: 1 })
+    .withMessage("Valid slot_id is required for each item"),
+  body("items.*.quantity")
+    .isInt({ min: 1, max: 10 })
+    .withMessage("Quantity must be between 1-10 for each item"),
+  body("customer_phone")
+    .optional()
+    .isMobilePhone("id-ID")
+    .withMessage("Valid Indonesian phone number required"),
+  body("payment_method")
+    .optional()
+    .isIn(["qris", "va", "gopay", "shopeepay"])
+    .withMessage("Invalid payment method"),
+];
+
+// Create multi-item order
+router.post("/multi", validateMultiItemOrder, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        error: "Validation failed",
+        details: errors.array(),
+      });
+    }
+
+    const { items, customer_phone, payment_method = "qris" } = req.body;
+    const machine_id = process.env.MACHINE_ID || "VM01";
+
+    console.log("📦 Create multi-item order request:", {
+      items,
+      customer_phone,
+      payment_method,
+      machine_id,
+    });
+
+    const customerPhoneValue = customer_phone || null;
+
+    // Validate all items and calculate total
+    let total_amount = 0;
+    const validatedItems = [];
+
+    for (const item of items) {
+      let slotInfo;
+
+      if (process.env.USE_SUPABASE === "true") {
+        const supabase = db.getClient();
+        const { data: slotData, error } = await supabase
+          .from("slots")
+          .select(`*, products (id, name, price, is_active)`)
+          .eq("id", item.slot_id)
+          .eq("machine_id", machine_id)
+          .eq("is_active", true)
+          .single();
+
+        if (error || !slotData) {
+          return res.status(404).json({
+            error: `Slot ${item.slot_id} not found or inactive`,
+          });
+        }
+
+        slotInfo = {
+          ...slotData,
+          product_name: slotData.products.name,
+          price: slotData.products.price,
+          product_active: slotData.products.is_active,
+          product_id: slotData.products.id,
+        };
+      } else {
+        const slot = await db.query(
+          `SELECT s.*, p.name as product_name, p.price, p.is_active as product_active
+           FROM slots s
+           JOIN products p ON s.product_id = p.id
+           WHERE s.id = ? AND s.machine_id = ? AND s.is_active = 1`,
+          [item.slot_id, machine_id]
+        );
+
+        if (slot.length === 0) {
+          return res.status(404).json({
+            error: `Slot ${item.slot_id} not found or inactive`,
+          });
+        }
+
+        slotInfo = slot[0];
+      }
+
+      // Check stock
+      if (slotInfo.current_stock < item.quantity) {
+        return res.status(400).json({
+          error: `Insufficient stock for ${slotInfo.product_name}`,
+          available: slotInfo.current_stock,
+          requested: item.quantity,
+        });
+      }
+
+      if (!slotInfo.product_active) {
+        return res.status(400).json({
+          error: `Product ${slotInfo.product_name} is not active`,
+        });
+      }
+
+      const price = slotInfo.price_override || slotInfo.price;
+      const item_total = price * item.quantity;
+      total_amount += item_total;
+
+      validatedItems.push({
+        slot_id: item.slot_id,
+        product_id: slotInfo.product_id,
+        product_name: slotInfo.product_name,
+        quantity: item.quantity,
+        unit_price: price,
+        total: item_total,
+      });
+    }
+
+    // Generate order ID
+    const order_id = `ORD-${moment().format("YYYYMMDD")}-${uuidv4()
+      .substr(0, 8)
+      .toUpperCase()}`;
+
+    const payment_token = uuidv4();
+    const payment_url = `midtrans://payment/${order_id}`;
+    const expires_at = moment().add(15, "minutes").toISOString();
+
+    // Insert main order (using first item as primary)
+    const primaryItem = validatedItems[0];
+
+    if (process.env.USE_SUPABASE === "true") {
+      const supabase = db.getClient();
+
+      // Insert main order
+      const { error: orderError } = await supabase.from("orders").insert({
+        id: order_id,
+        machine_id,
+        slot_id: primaryItem.slot_id,
+        product_id: primaryItem.product_id,
+        quantity: validatedItems.reduce((sum, item) => sum + item.quantity, 0),
+        total_amount,
+        payment_url,
+        payment_token,
+        expires_at,
+        customer_phone: customerPhoneValue,
+        status: "PENDING",
+      });
+
+      if (orderError) throw orderError;
+
+      // Insert order items
+      const orderItems = validatedItems.map((item) => ({
+        order_id,
+        slot_id: item.slot_id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total: item.total,
+      }));
+
+      const { error: itemsError } = await supabase
+        .from("order_items")
+        .insert(orderItems);
+
+      if (itemsError) throw itemsError;
+
+      // Insert payment
+      const { error: paymentError } = await supabase.from("payments").insert({
+        order_id,
+        gateway_name: "midtrans",
+        amount: total_amount,
+        payment_type: payment_method,
+        status: "PENDING",
+      });
+
+      if (paymentError) throw paymentError;
+    } else {
+      // MySQL
+      await db.query(
+        `INSERT INTO orders (id, machine_id, slot_id, product_id, quantity, total_amount, 
+                            payment_url, payment_token, expires_at, customer_phone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          order_id,
+          machine_id,
+          primaryItem.slot_id,
+          primaryItem.product_id,
+          validatedItems.reduce((sum, item) => sum + item.quantity, 0),
+          total_amount,
+          payment_url,
+          payment_token,
+          expires_at,
+          customerPhoneValue,
+        ]
+      );
+
+      // Insert order items
+      for (const item of validatedItems) {
+        await db.query(
+          `INSERT INTO order_items (order_id, slot_id, product_id, product_name, quantity, unit_price, total)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            order_id,
+            item.slot_id,
+            item.product_id,
+            item.product_name,
+            item.quantity,
+            item.unit_price,
+            item.total,
+          ]
+        );
+      }
+
+      // Insert payment
+      await db.query(
+        `INSERT INTO payments (order_id, gateway_name, amount, payment_type)
+         VALUES (?, 'midtrans', ?, ?)`,
+        [order_id, total_amount, payment_method]
+      );
+    }
+
+    res.status(201).json({
+      order_id,
+      items: validatedItems,
+      total_quantity: validatedItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0
+      ),
+      total_amount,
+      payment_url,
+      payment_token,
+      expires_at,
+      qr_string: payment_url,
+      status: "PENDING",
+    });
+  } catch (error) {
+    console.error("Create multi-item order error:", error);
+    res.status(500).json({
+      error: "Failed to create multi-item order",
+      details: error.message,
+    });
+  }
+});
+
 // Create new order
 router.post("/", validateOrder, async (req, res) => {
   try {
