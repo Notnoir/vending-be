@@ -3,7 +3,9 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { body, validationResult } = require("express-validator");
 const db = require("../config/database");
+const { supabase } = require("../config/supabase");
 
+const USE_SUPABASE = process.env.USE_SUPABASE === "true";
 const router = express.Router();
 
 // Validation middleware
@@ -27,22 +29,39 @@ router.post("/login", validateLogin, async (req, res) => {
 
     const { username, password } = req.body;
 
-    // Find user
-    const user = await db.query(
-      `
-      SELECT * FROM admin_users 
-      WHERE username = ? AND is_active = 1
-    `,
-      [username]
-    );
+    let userInfo;
 
-    if (user.length === 0) {
-      return res.status(401).json({
-        error: "Invalid credentials",
-      });
+    if (USE_SUPABASE) {
+      // Supabase: Find user
+      const { data: userData, error } = await supabase
+        .from("admin_users")
+        .select("*")
+        .eq("username", username)
+        .eq("is_active", true)
+        .single();
+
+      if (error || !userData) {
+        return res.status(401).json({
+          error: "Invalid credentials",
+        });
+      }
+
+      userInfo = userData;
+    } else {
+      // MySQL: Find user
+      const user = await db.query(
+        `SELECT * FROM admin_users WHERE username = ? AND is_active = 1`,
+        [username]
+      );
+
+      if (user.length === 0) {
+        return res.status(401).json({
+          error: "Invalid credentials",
+        });
+      }
+
+      userInfo = user[0];
     }
-
-    const userInfo = user[0];
 
     // Check password
     const isValidPassword = await bcrypt.compare(
@@ -62,17 +81,21 @@ router.post("/login", validateLogin, async (req, res) => {
         username: userInfo.username,
         role: userInfo.role,
       },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || "default-secret-key",
       { expiresIn: process.env.JWT_EXPIRE || "24h" }
     );
 
     // Update last login
-    await db.query(
-      `
-      UPDATE admin_users SET last_login = NOW() WHERE id = ?
-    `,
-      [userInfo.id]
-    );
+    if (USE_SUPABASE) {
+      await supabase
+        .from("admin_users")
+        .update({ last_login: new Date().toISOString() })
+        .eq("id", userInfo.id);
+    } else {
+      await db.query(`UPDATE admin_users SET last_login = NOW() WHERE id = ?`, [
+        userInfo.id,
+      ]);
+    }
 
     res.json({
       token,

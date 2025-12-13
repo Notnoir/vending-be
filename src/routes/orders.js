@@ -610,39 +610,42 @@ router.get("/machine/:machine_id", async (req, res) => {
     const { machine_id } = req.params;
     const { status, limit = 50, offset = 0 } = req.query;
 
-    let whereClause = "WHERE o.machine_id = ?";
-    let queryParams = [machine_id];
+    const supabase = db.getClient();
+
+    // Build query
+    let query = supabase
+      .from("orders")
+      .select(
+        `
+        *,
+        products!inner(name),
+        slots!inner(slot_number),
+        payments(status)
+      `
+      )
+      .eq("machine_id", machine_id)
+      .order("created_at", { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (status) {
-      whereClause += " AND o.status = ?";
-      queryParams.push(status);
+      query = query.eq("status", status);
     }
 
-    const orders = await db.query(
-      `
-      SELECT o.*, p.name as product_name, s.slot_number,
-             pay.status as payment_status
-      FROM orders o
-      JOIN products p ON o.product_id = p.id
-      JOIN slots s ON o.slot_id = s.id
-      LEFT JOIN payments pay ON o.id = pay.order_id
-      ${whereClause}
-      ORDER BY o.created_at DESC
-      LIMIT ? OFFSET ?
-    `,
-      [...queryParams, parseInt(limit), parseInt(offset)]
-    );
+    const { data: orders, error, count } = await query;
 
-    const totalCount = await db.query(
-      `
-      SELECT COUNT(*) as count FROM orders o ${whereClause}
-    `,
-      queryParams
-    );
+    if (error) throw error;
+
+    // Transform data to match expected format
+    const transformedOrders = orders.map((order) => ({
+      ...order,
+      product_name: order.products?.name,
+      slot_number: order.slots?.slot_number,
+      payment_status: order.payments?.[0]?.status,
+    }));
 
     res.json({
-      orders,
-      total: totalCount[0].count,
+      orders: transformedOrders,
+      total: count || orders.length,
       limit: parseInt(limit),
       offset: parseInt(offset),
     });

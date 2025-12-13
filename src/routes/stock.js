@@ -177,41 +177,43 @@ router.get("/logs/:machine_id", async (req, res) => {
     const { machine_id } = req.params;
     const { limit = 50, offset = 0, change_type } = req.query;
 
-    let whereClause = "WHERE sl.machine_id = ?";
-    let queryParams = [machine_id];
+    const supabase = db.getClient();
+
+    // Build query
+    let query = supabase
+      .from("stock_logs")
+      .select(
+        `
+        *,
+        slots!inner(
+          slot_number,
+          products(name)
+        )
+      `
+      )
+      .eq("machine_id", machine_id)
+      .order("created_at", { ascending: false })
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (change_type) {
-      whereClause += " AND sl.change_type = ?";
-      queryParams.push(change_type);
+      query = query.eq("change_type", change_type);
     }
 
-    const logs = await db.query(
-      `
-      SELECT 
-        sl.*,
-        s.slot_number,
-        p.name as product_name
-      FROM stock_logs sl
-      JOIN slots s ON sl.slot_id = s.id
-      LEFT JOIN products p ON s.product_id = p.id
-      ${whereClause}
-      ORDER BY sl.created_at DESC
-      LIMIT ? OFFSET ?
-    `,
-      [...queryParams, parseInt(limit), parseInt(offset)]
-    );
+    const { data: logs, error, count } = await query;
 
-    const totalCount = await db.query(
-      `
-      SELECT COUNT(*) as count FROM stock_logs sl ${whereClause}
-    `,
-      queryParams
-    );
+    if (error) throw error;
+
+    // Transform data to match expected format
+    const transformedLogs = logs.map((log) => ({
+      ...log,
+      slot_number: log.slots?.slot_number,
+      product_name: log.slots?.products?.name,
+    }));
 
     res.json({
       machine_id,
-      logs,
-      total: totalCount[0].count,
+      logs: transformedLogs,
+      total: count || logs.length,
       limit: parseInt(limit),
       offset: parseInt(offset),
     });
