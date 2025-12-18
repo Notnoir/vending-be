@@ -328,6 +328,49 @@ router.put(
   }
 );
 
+/**
+ * @route   GET /api/users/all
+ * @desc    Get all users (admin only)
+ * @access  Private (Admin)
+ */
+router.get("/all", authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: users, error } = await supabase
+      .from("users")
+      .select(
+        "id, email, full_name, phone, role, is_active, created_at, last_login"
+      )
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Format users data for admin display
+    const formattedUsers = users.map((user) => ({
+      id: user.id,
+      name: user.full_name,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      status: user.is_active ? "active" : "inactive",
+      createdAt: user.created_at,
+      lastLogin: user.last_login,
+    }));
+
+    res.json({
+      success: true,
+      data: formattedUsers,
+      total: formattedUsers.length,
+    });
+  } catch (error) {
+    console.error("Get all users error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch users",
+      error: error.message,
+    });
+  }
+});
+
 // Middleware to authenticate JWT token
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];
@@ -354,6 +397,23 @@ function authenticateToken(req, res, next) {
       next();
     }
   );
+}
+
+// Middleware to check if user is admin
+function authenticateAdmin(req, res, next) {
+  console.log("User role check:", req.user); // Debug log
+
+  // Accept both 'admin' and 'super_admin' roles
+  const allowedRoles = ["admin", "super_admin", "SUPER_ADMIN", "ADMIN"];
+
+  if (!allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: "Access denied. Admin privileges required.",
+      userRole: req.user.role, // Include user role in response for debugging
+    });
+  }
+  next();
 }
 
 module.exports = router;
