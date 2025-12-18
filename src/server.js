@@ -28,37 +28,59 @@ const allowedOrigins =
   process.env.NODE_ENV === "production"
     ? [
         process.env.FRONTEND_URL || "https://vending-fe.vercel.app",
-        "https://vending-machine-frontend.vercel.app", // Add your actual frontend URL
-        process.env.BACKEND_URL || "https://vending-be.onrender.com", // Allow same-origin for mobile upload
+        "https://vending-machine-frontend.vercel.app",
+        process.env.BACKEND_URL || "https://vending-be.onrender.com",
       ]
     : [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://192.168.100.17:3000", // Mobile dev
-        "http://localhost:3001", // Backend self
+        "http://192.168.100.17:3000", 
+        "http://localhost:3001",
       ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, Postman, etc, direct browser access)
+      // Allow requests with no origin (mobile apps, Postman, curl, etc)
       if (!origin) return callback(null, true);
 
-      if (
-        allowedOrigins.indexOf(origin) !== -1 ||
-        process.env.NODE_ENV !== "production"
-      ) {
-        callback(null, true);
-      } else {
-        // In production, also allow if origin matches backend URL
-        const backendUrl = process.env.BACKEND_URL || "";
-        if (origin.startsWith(backendUrl)) {
-          return callback(null, true);
-        }
-        callback(new Error("Not allowed by CORS"));
+      // Development mode - allow all
+      if (process.env.NODE_ENV !== "production") {
+        return callback(null, true);
       }
+
+      // Production mode - check allowed origins
+      // 1. Check exact match
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        return callback(null, true);
+      }
+
+      // 2. Allow all Vercel preview deployments
+      if (origin.endsWith(".vercel.app")) {
+        console.log(`✅ CORS allowed for Vercel deployment: ${origin}`);
+        return callback(null, true);
+      }
+
+      // 3. Allow Render deployments
+      if (origin.endsWith(".onrender.com")) {
+        console.log(`✅ CORS allowed for Render deployment: ${origin}`);
+        return callback(null, true);
+      }
+
+      // 4. Allow localhost and 127.0.0.1 for testing
+      if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) {
+        console.log(`✅ CORS allowed for localhost: ${origin}`);
+        return callback(null, true);
+      }
+
+      // Log and reject
+      console.error(`❌ CORS blocked origin: ${origin}`);
+      console.error(`Allowed origins:`, allowedOrigins);
+      callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
