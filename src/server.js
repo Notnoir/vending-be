@@ -34,7 +34,7 @@ const allowedOrigins =
     : [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://192.168.100.17:3000", 
+        "http://192.168.100.17:3000",
         "http://localhost:3001",
       ];
 
@@ -68,7 +68,10 @@ app.use(
       }
 
       // 4. Allow localhost and 127.0.0.1 for testing
-      if (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1")) {
+      if (
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("http://127.0.0.1")
+      ) {
         console.log(`✅ CORS allowed for localhost: ${origin}`);
         return callback(null, true);
       }
@@ -80,7 +83,11 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "ngrok-skip-browser-warning"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "ngrok-skip-browser-warning",
+    ],
   })
 );
 
@@ -132,7 +139,6 @@ app.use("/api/health-assistant", require("./routes/healthAssistant"));
 app.use("/api/prescription-scan", require("./routes/prescriptionScan"));
 app.use("/api/debug", require("./routes/debug")); // Debug endpoints for testing
 app.use("/api/announcements", require("./routes/announcements")); // Announcement system
-
 
 // 404 handler
 app.use("*", (req, res) => {

@@ -99,10 +99,26 @@ class MqttService {
         // Supabase implementation
         const { supabase } = require("../config/supabase");
 
-        // Store telemetry data
-        await supabase.from("telemetry").insert({
+        // Store to machine_data table (structured format)
+        await supabase.from("machine_data").insert({
           machine_id: machineId,
-          data: data,
+          temperature: data.temperature || null,
+          humidity: data.humidity || null,
+          door_status: data.doorOpen ? "open" : "closed",
+          power_status: "on",
+          stock_summary: data.slots ? JSON.stringify(data.slots) : null,
+          sales_count: 0,
+          error_codes:
+            data.tempAlert || data.humidityAlert
+              ? JSON.stringify({
+                  temp_alert: data.tempAlert,
+                  humidity_alert: data.humidityAlert,
+                  rssi: data.rssi,
+                  uptime: data.uptime,
+                })
+              : null,
+          status: data.tempAlert || data.humidityAlert ? "alert" : "normal",
+          recorded_at: new Date().toISOString(),
         });
 
         // Update machine last_seen
@@ -110,6 +126,8 @@ class MqttService {
           .from("machines")
           .update({ last_seen: new Date().toISOString() })
           .eq("id", machineId);
+
+        console.log(`✅ Telemetry saved to machine_data for ${machineId}`);
 
         // Process slot levels if provided
         if (data.slots && Array.isArray(data.slots)) {
@@ -145,13 +163,21 @@ class MqttService {
         }
       } else {
         // MySQL implementation
-        // Store telemetry data
+        // Store to machine_data table
         await db.query(
           `
-          INSERT INTO telemetry (machine_id, data)
-          VALUES (?, ?)
+          INSERT INTO machine_data 
+          (machine_id, temperature, humidity, door_status, power_status, status, recorded_at)
+          VALUES (?, ?, ?, ?, ?, ?, NOW())
         `,
-          [machineId, JSON.stringify(data)]
+          [
+            machineId,
+            data.temperature || null,
+            data.humidity || null,
+            data.doorOpen ? "open" : "closed",
+            "on",
+            data.tempAlert || data.humidityAlert ? "alert" : "normal",
+          ]
         );
 
         // Update machine last_seen

@@ -89,24 +89,24 @@ router.post("/update", validateStockUpdate, async (req, res) => {
       performed_by = "system",
     } = req.body;
 
-    // Get current slot info
-    const slot = await db.query(
-      `
-      SELECT s.*, m.id as machine_id
-      FROM slots s
-      JOIN machines m ON s.machine_id = m.id
-      WHERE s.id = ?
-    `,
-      [slot_id]
-    );
+    const supabase = db.getClient();
 
-    if (slot.length === 0) {
+    // Get current slot info
+    const { data: slotData, error: slotError } = await supabase
+      .from("slots")
+      .select("*")
+      .eq("id", slot_id)
+      .single();
+
+    if (slotError || !slotData) {
+      console.error("Slot fetch error:", slotError);
       return res.status(404).json({
         error: "Slot not found",
       });
     }
 
-    const slotInfo = slot[0];
+    const slotInfo = slotData;
+    const machine_id = slotInfo.machine_id; // Use machine_id from slots table directly
     const quantity_before = slotInfo.current_stock;
     let quantity_after = quantity;
     let quantity_change = 0;
@@ -123,37 +123,37 @@ router.post("/update", validateStockUpdate, async (req, res) => {
       quantity_change = quantity_after - quantity_before;
     }
 
-    await db.transaction(async (connection) => {
-      // Update slot stock
-      await connection.execute(
-        `
-        UPDATE slots SET current_stock = ? WHERE id = ?
-      `,
-        [quantity_after, slot_id]
-      );
+    // Update slot stock
+    const { error: updateError } = await supabase
+      .from("slots")
+      .update({ current_stock: quantity_after })
+      .eq("id", slot_id);
 
-      // Log stock change
-      await connection.execute(
-        `
-        INSERT INTO stock_logs (machine_id, slot_id, change_type, quantity_before, quantity_after, quantity_change, reason, performed_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-        [
-          slotInfo.machine_id,
-          slot_id,
-          change_type,
-          quantity_before,
-          quantity_after,
-          quantity_change,
-          reason,
-          performed_by,
-        ]
-      );
+    if (updateError) {
+      console.error("Slot update error:", updateError);
+      throw updateError;
+    }
+
+    // Log stock change
+    const { error: logError } = await supabase.from("stock_logs").insert({
+      machine_id: machine_id,
+      slot_id: slot_id,
+      change_type: change_type,
+      quantity_before: quantity_before,
+      quantity_after: quantity_after,
+      quantity_change: quantity_change,
+      reason: reason || null,
+      performed_by: performed_by,
     });
+
+    if (logError) {
+      console.error("Stock log insert error:", logError);
+      throw logError;
+    }
 
     res.json({
       slot_id,
-      machine_id: slotInfo.machine_id,
+      machine_id: machine_id,
       slot_number: slotInfo.slot_number,
       change_type,
       quantity_before,
@@ -167,6 +167,7 @@ router.post("/update", validateStockUpdate, async (req, res) => {
     console.error("Update stock error:", error);
     res.status(500).json({
       error: "Failed to update stock",
+      details: error.message,
     });
   }
 });
