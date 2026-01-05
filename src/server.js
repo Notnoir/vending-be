@@ -87,9 +87,17 @@ app.use(
       "Content-Type",
       "Authorization",
       "ngrok-skip-browser-warning",
+      "X-Requested-With",
+      "Accept",
     ],
+    exposedHeaders: ["Content-Range", "X-Content-Range"],
+    optionsSuccessStatus: 200, // For legacy browser support
+    preflightContinue: false,
   })
 );
+
+// Explicit OPTIONS handler for all routes
+app.options("*", cors());
 
 // Body parsing middleware
 app.use(express.json({ limit: "10mb" }));
