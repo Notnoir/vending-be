@@ -100,32 +100,49 @@ class MqttService {
         const { supabase } = require("../config/supabase");
 
         // Store to machine_data table (structured format)
-        await supabase.from("machine_data").insert({
-          machine_id: machineId,
-          temperature: data.temperature || null,
-          humidity: data.humidity || null,
-          door_status: data.doorOpen ? "open" : "closed",
-          power_status: "on",
-          stock_summary: data.slots ? JSON.stringify(data.slots) : null,
-          sales_count: 0,
-          error_codes:
-            data.tempAlert || data.humidityAlert
-              ? JSON.stringify({
-                  temp_alert: data.tempAlert,
-                  humidity_alert: data.humidityAlert,
-                  rssi: data.rssi,
-                  uptime: data.uptime,
-                })
-              : null,
-          status: data.tempAlert || data.humidityAlert ? "alert" : "normal",
-          recorded_at: new Date().toISOString(),
-        });
+        const { data: insertData, error: insertError } = await supabase
+          .from("machine_data")
+          .insert({
+            machine_id: machineId,
+            temperature: data.temperature || null,
+            humidity: data.humidity || null,
+            door_status: data.doorOpen ? "open" : "closed",
+            power_status: "on",
+            stock_summary: data.slots ? JSON.stringify(data.slots) : null,
+            sales_count: 0,
+            error_codes:
+              data.tempAlert || data.humidityAlert
+                ? JSON.stringify({
+                    temp_alert: data.tempAlert,
+                    humidity_alert: data.humidityAlert,
+                    rssi: data.rssi,
+                    uptime: data.uptime,
+                  })
+                : null,
+            status: data.tempAlert || data.humidityAlert ? "warning" : "normal", // Valid values: 'normal', 'warning', 'error', 'offline'
+            recorded_at: new Date().toISOString(),
+          });
+
+        if (insertError) {
+          console.error(
+            `❌ Failed to insert telemetry for ${machineId}:`,
+            insertError
+          );
+          throw insertError;
+        }
 
         // Update machine last_seen
-        await supabase
+        const { error: updateError } = await supabase
           .from("machines")
           .update({ last_seen: new Date().toISOString() })
           .eq("id", machineId);
+
+        if (updateError) {
+          console.warn(
+            `⚠️  Failed to update last_seen for ${machineId}:`,
+            updateError
+          );
+        }
 
         console.log(`✅ Telemetry saved to machine_data for ${machineId}`);
 
