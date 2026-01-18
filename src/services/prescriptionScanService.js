@@ -181,26 +181,29 @@ Berikan output dalam format JSON yang valid.`;
 
     console.log("🔍 Finding matches for medications:", medications.length);
     console.log("📦 Available products:", availableProducts.length);
+    console.log("📋 Available product names:", availableProducts.map(p => p.name));
 
     for (const med of medications) {
       if (!med.name) continue;
 
       const medName = med.name.toLowerCase().trim();
-      console.log(`\n🔎 Searching for: "${medName}"`);
+      // Remove brackets and their content for better matching
+      const cleanMedName = medName.replace(/\[.*?\]/g, '').trim();
+      console.log(`\n🔎 Searching for: "${medName}" (cleaned: "${cleanMedName}")`);
 
       // Find products that match the medication name
       const matchedProducts = availableProducts.filter((product) => {
         const productName = product.name.toLowerCase().trim();
 
         // Direct match
-        if (productName.includes(medName) || medName.includes(productName)) {
+        if (productName.includes(cleanMedName) || cleanMedName.includes(productName)) {
           console.log(`  ✅ Direct match: "${product.name}"`);
           return true;
         }
 
         // Similarity match
-        const similarity = this.calculateSimilarity(productName, medName);
-        if (similarity > 0.6) {
+        const similarity = this.calculateSimilarity(productName, cleanMedName);
+        if (similarity > 0.5) {
           console.log(
             `  ✅ Similarity match (${(similarity * 100).toFixed(0)}%): "${
               product.name
@@ -210,12 +213,12 @@ Berikan output dalam format JSON yang valid.`;
         }
 
         // Check if medication name contains product name or vice versa (partial match)
-        const medWords = medName.split(/\s+/);
+        const medWords = cleanMedName.split(/\s+/);
         const prodWords = productName.split(/\s+/);
 
         for (const medWord of medWords) {
           for (const prodWord of prodWords) {
-            if (medWord.length > 3 && prodWord.length > 3) {
+            if (medWord.length > 2 && prodWord.length > 2) {
               if (medWord.includes(prodWord) || prodWord.includes(medWord)) {
                 console.log(
                   `  ✅ Word match: "${medWord}" ~ "${prodWord}" in "${product.name}"`

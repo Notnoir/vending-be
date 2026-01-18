@@ -12,13 +12,18 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB max
   },
   fileFilter: (req, file, cb) => {
+    console.log("Multer fileFilter - mimetype:", file.mimetype);
+    console.log("Multer fileFilter - originalname:", file.originalname);
+    
     const allowedTypes = /jpeg|jpg|png/;
     const mimetype = allowedTypes.test(file.mimetype);
+    const extname = allowedTypes.test(file.originalname.toLowerCase());
 
-    if (mimetype) {
+    if (mimetype || extname) {
       return cb(null, true);
     } else {
-      cb(new Error("Only image files are allowed!"));
+      console.error("Invalid file type:", file.mimetype, file.originalname);
+      cb(new Error(`Only image files are allowed! Received: ${file.mimetype}`));
     }
   },
 });
@@ -491,14 +496,43 @@ router.get("/upload", (req, res) => {
  * @desc    Upload prescription image from mobile
  * @access  Public
  */
-router.post("/upload", upload.single("prescription"), async (req, res) => {
+router.post("/upload", (req, res, next) => {
+  upload.single("prescription")(req, res, (err) => {
+    if (err) {
+      console.error("Multer error:", err.message);
+      console.error("Multer error stack:", err.stack);
+      return res.status(400).json({
+        success: false,
+        message: err.message || "File upload failed",
+      });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const { session } = req.query;
+
+    console.log("Upload request - Session:", session);
+    console.log("Upload request - File present:", req.file ? "YES" : "NO");
+    if (req.file) {
+      console.log("File details:", {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+      });
+    }
 
     if (!session) {
       return res.status(400).json({
         success: false,
         message: "Session ID required",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No prescription image file uploaded",
       });
     }
 
@@ -556,9 +590,13 @@ router.post("/upload", upload.single("prescription"), async (req, res) => {
     });
   } catch (error) {
     console.error("Error uploading prescription:", error);
+    console.error("Error stack:", error.stack);
+    console.error("Request file:", req.file ? "Present" : "Missing");
+    console.error("Session:", req.query.session);
     return res.status(500).json({
       success: false,
       message: "Failed to upload prescription",
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
     });
   }
 });
