@@ -29,12 +29,12 @@ class HealthAssistantService {
         },
       });
       console.log(
-        "✅ Health Assistant Service initialized successfully (using gemini-2.5-flash)"
+        "✅ Health Assistant Service initialized successfully (using gemini-2.5-flash)",
       );
     } catch (error) {
       console.error(
         "Failed to initialize Health Assistant Service:",
-        error.message
+        error.message,
       );
     }
   }
@@ -62,7 +62,7 @@ class HealthAssistantService {
             price_override,
             is_active
           )
-        `
+        `,
         )
         .eq("is_active", true)
         .eq("slots.machine_id", machineId)
@@ -85,13 +85,17 @@ class HealthAssistantService {
           slot_id: slot?.id,
           slot_number: slot?.slot_number,
           current_stock: slot?.current_stock,
+          stock: slot?.current_stock, // Add stock alias for Flutter
           capacity: slot?.capacity,
           final_price: slot?.price_override || product.price,
+          is_available: (slot?.current_stock || 0) > 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         };
       });
 
       console.log(
-        `✅ Loaded ${this.availableProducts.length} products with stock info for AI recommendations`
+        `✅ Loaded ${this.availableProducts.length} products with stock info for AI recommendations`,
       );
     } catch (error) {
       console.error("Failed to load products:", error.message);
@@ -105,7 +109,7 @@ class HealthAssistantService {
         ? `\n\nPRODUK TERSEDIA DI VENDING MACHINE:\n${this.availableProducts
             .map(
               (p) =>
-                `- ${p.name}: ${p.description} (Rp ${p.price.toLocaleString()})`
+                `- ${p.name}: ${p.description} (Rp ${p.price.toLocaleString()})`,
             )
             .join("\n")}`
         : "";
@@ -125,16 +129,17 @@ ATURAN PENTING:
 3. Jangan memberikan diagnosis medis yang pasti - hanya informasi umum
 4. JIKA menanyakan rekomendasi obat, PRIORITASKAN produk yang tersedia di vending machine kami
 5. Sebutkan produk yang tersedia dengan format: "Kami memiliki [PRODUCT:nama_produk] yang bisa membantu..."
-6. Jika pertanyaan di luar topik kesehatan/obat/penyakit, jawab dengan sopan: "Maaf, pertanyaan tersebut di luar dari kemampuan saya. Saya hanya dapat membantu menjawab pertanyaan seputar kesehatan, obat-obatan, penyakit, dan rekomendasi perawatan kesehatan."
+6. JANGAN gunakan format markdown seperti ** atau __ untuk bold/italic
+7. Jika pertanyaan di luar topik kesehatan/obat/penyakit, jawab dengan sopan: "Maaf, pertanyaan tersebut di luar dari kemampuan saya. Saya hanya dapat membantu menjawab pertanyaan seputar kesehatan, obat-obatan, penyakit, dan rekomendasi perawatan kesehatan."
 
-Gunakan bahasa yang ramah, empatik, dan profesional.`;
+Gunakan bahasa yang ramah, empatik, dan profesional tanpa formatting khusus.`;
   }
 
   async chat(userMessage, conversationHistory = []) {
     try {
       if (!this.model) {
         throw new Error(
-          "Health Assistant Service not initialized. Please check GEMINI_API_KEY."
+          "Health Assistant Service not initialized. Please check GEMINI_API_KEY.",
         );
       }
 
@@ -146,7 +151,7 @@ Gunakan bahasa yang ramah, empatik, dan profesional.`;
         // Only check for first message
         isHealthRelated = await this.isHealthRelatedQuestion(
           userMessage,
-          conversationHistory
+          conversationHistory,
         );
 
         if (!isHealthRelated) {
@@ -273,7 +278,7 @@ Jawaban:`;
         const product = this.availableProducts.find(
           (p) =>
             p.name.toLowerCase().includes(productName.toLowerCase()) ||
-            productName.toLowerCase().includes(p.name.toLowerCase())
+            productName.toLowerCase().includes(p.name.toLowerCase()),
         );
 
         if (product && !products.find((p) => p.id === product.id)) {

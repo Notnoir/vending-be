@@ -29,7 +29,7 @@ router.post("/chat", async (req, res) => {
     // Get response from health assistant
     const result = await healthAssistantService.chat(
       message.trim(),
-      conversationHistory || []
+      conversationHistory || [],
     );
 
     if (!result.success) {
@@ -39,6 +39,10 @@ router.post("/chat", async (req, res) => {
           result.response || "Terjadi kesalahan pada layanan asisten kesehatan",
       });
     }
+
+    console.log(
+      `✅ Chat response generated with ${result.recommendedProducts?.length || 0} product recommendations`,
+    );
 
     return res.json({
       success: true,
@@ -73,7 +77,7 @@ router.post("/recommendations", async (req, res) => {
     }
 
     const result = await healthAssistantService.getProductRecommendations(
-      symptoms.trim()
+      symptoms.trim(),
     );
 
     if (!result.success) {
